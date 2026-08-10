@@ -1,183 +1,351 @@
-"""Launches emulators with the proper args + environment.
+"""Launching games and tracking how long they were played.
 
-The launcher is the bridge between a GameEntry and the actual
-emulator process. Each game type (ROM, Steam, Epic, GOG) gets
-a different launch strategy, but they all funnel through this
-class so you get consistent controller / overlay handling.
+Every way of starting a game — an emulator, a native binary, a Steam app, a
+Heroic game — funnels through here so profiles, environment and playtime work
+identically regardless of source.
+
+A note on playtime honesty: launching a Steam game runs `steam steam://run/ID`,
+which hands off to the already-running Steam client and exits almost
+immediately. Timing that process would record a two-second session for a
+four-hour play. Rather than invent a number, launches that cannot be
+timed are marked `tracks_playtime = False` and no session is recorded. The
+interface says playtime is tracked by Steam instead of showing a wrong figure.
+
+Nothing here touches the network.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import shlex
+import shutil
 import subprocess
-import platform
+import threading
+
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from rose_gamelab.config import Config
-from rose_gamelab.core.emulator import GameEntry, SYSTEMS
+from rose_gamelab.core.emulator import get_system
+from rose_gamelab.core.library import Library
+from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
+
+logger = logging.getLogger(__name__)
+
+# Launch kinds that hand off to another program and exit immediately, so the
+# process we spawn is not the game and cannot be timed.
+HANDOFF_KINDS = {"steam"}
 
 
-class EmulatorProcess:
-    """Thin wrapper around an emulator subprocess so we can track / kill it."""
+class LaunchError(Exception):
+    """Raised when a game cannot be started. The message is shown to the user,
+    so it must say what is wrong and what to do about it."""
 
-    def __init__(self, proc: subprocess.Popen) -> None:
-        self.proc = proc
-        self._cleaned_up = False
+
+@dataclass
+class GameProcess:
+    """A running game."""
+
+    process: subprocess.Popen
+    game_id: int
+    session_id: Optional[int] = None
+    tracks_playtime: bool = True
+    command: list[str] = field(default_factory=list)
 
     @property
     def is_running(self) -> bool:
-        return self.proc.poll() is None
+        return self.process.poll() is None
+
+    def wait(self, timeout: Optional[float] = None) -> Optional[int]:
+        try:
+            return self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
 
     def terminate(self) -> None:
-        """Safe termination — try graceful first, then force."""
-        if self._cleaned_up:
-            return
-        self._cleaned_up = True
-        if self.proc.poll() is None:
-            try:
-                self.proc.terminate()
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    self.proc.kill()
-                except OSError:
-                    pass
+        """Ask the game to close, then force it if it will not.
 
-    def __del__(self) -> None:
-        if not self._cleaned_up and self.is_running:
+        The process is spawned in its own session, so signals reach the whole
+        process group — emulators frequently fork helpers that would otherwise
+        survive and keep a window open.
+        """
+        if self.process.poll() is not None:
+            return
+
+        try:
+            os.killpg(os.getpgid(self.process.pid), 15)  # SIGTERM
+        except (OSError, ProcessLookupError):
+            self.process.terminate()
+
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
             try:
-                self.proc.kill()
-            except OSError:
-                pass
+                os.killpg(os.getpgid(self.process.pid), 9)  # SIGKILL
+            except (OSError, ProcessLookupError):
+                self.process.kill()
+
+
+def build_command(
+    *,
+    kind: str,
+    target: str,
+    profile: LaunchProfile,
+    emulator: Optional[str] = None,
+    emulator_path: Optional[str] = None,
+    args: Optional[str] = None,
+    system: Optional[str] = None,
+    retroarch_path: Optional[str] = None,
+    core_path: Optional[str] = None,
+) -> list[str]:
+    """Build the full command line for a launch. Pure function, no side effects.
+
+    Separated from spawning so the exact command can be tested, logged, and
+    shown to the user in the interface before anything runs.
+    """
+    command: list[str]
+
+    if kind == "steam":
+        # Route through the Steam client so Proton, cloud saves and the overlay
+        # all engage. Launching the executable directly bypasses every one.
+        steam = shutil.which("steam") or "steam"
+        command = [steam, target if target.startswith("steam://") else f"steam://run/{target}"]
+        # Steam applies its own launch options; wrappers here would apply to the
+        # client, not the game.
+        return command
+
+    if kind in ("native", "gog", "heroic", "custom"):
+        command = [target]
+
+    elif kind == "emulator":
+        if core_path and retroarch_path:
+            # RetroArch with an explicit libretro core.
+            command = [retroarch_path, "-L", core_path, target]
+        elif emulator_path:
+            command = [emulator_path, target]
+        else:
+            raise LaunchError(
+                f"No emulator configured for {system or 'this system'}. "
+                f"Set one in Settings, or install {emulator or 'a suitable emulator'}."
+            )
+    else:
+        raise LaunchError(f"Unknown launch type: {kind}")
+
+    if args:
+        command.extend(shlex.split(args))
+
+    if profile.extra_args:
+        command.extend(shlex.split(profile.extra_args))
+
+    return profile.wrap(command)
 
 
 class Launcher:
-    """Orchestrates spawning emulator processes with correct arguments."""
+    """Starts games and records play sessions."""
 
-    def __init__(self, config: Config) -> None:
-        self.config = config
-        self._active_procs: list[EmulatorProcess] = []
+    def __init__(
+        self,
+        library: Library,
+        profiles: ProfileStore,
+        *,
+        emulator_paths: Optional[dict[str, str]] = None,
+        retroarch_path: Optional[str] = None,
+        libretro_core_dir: Optional[str] = None,
+    ) -> None:
+        self.library = library
+        self.profiles = profiles
+        # User-configured emulator binaries, keyed by system id.
+        self.emulator_paths = emulator_paths or {}
+        self.retroarch_path = retroarch_path
+        self.libretro_core_dir = libretro_core_dir
+        self.running: dict[int, GameProcess] = {}
 
-    # ── Entry point ─────────────────────────────────────────────
+    # ── Resolution ────────────────────────────────────────────────
 
-    def launch(self, game: GameEntry) -> Optional[EmulatorProcess]:
-        """Launch the appropriate backend for a given game."""
-        if game.is_steam or game.is_heroic or game.is_gog:
-            return self._launch_store_game(game)
-        return self._launch_rom(game)
+    def resolve_emulator(self, system_id: str) -> Optional[str]:
+        """Find the emulator binary for a system: user setting, then PATH."""
+        configured = self.emulator_paths.get(system_id)
+        if configured and Path(configured).is_file():
+            return configured
 
-    # ── ROM launchers ───────────────────────────────────────────
-
-    def _launch_rom(self, game: GameEntry) -> Optional[EmulatorProcess]:
-        emitter = game.system  # "snes", "gba", etc.
-        system = SYSTEMS.get(emitter)
-        if not system:
-            raise ValueError(f"Unknown system: {emitter}")
-
-        # Find emulator binary
-        emulator_name = system.default_core
-        emulator_path = self.config.get(f"emulators.{emitter}")
-        if not emulator_path:
-            # Try to find it on PATH
-            emulator_path = self._find_on_path(emulator_name)
-
-        if not emulator_path or not os.path.isfile(emulator_path):
-            raise ValueError(f"Emulator not found for {emitter}: '{emulator_name}'")
-
-        # Build the command
-        cmd = self._build_rom_command(emulator_path, game)
-
-        # Launch with proper env
-        env = self._setup_env()
-        proc = subprocess.Popen(cmd, env=env, start_new_session=platform.system() != "Windows")
-        return EmulatorProcess(proc)
-
-    def _build_rom_command(self, emulator_path: str, game: GameEntry) -> list[str]:
-        """Build the command to launch a ROM.
-
-        Strategy: try per-emulator launch first. If no custom args set,
-        fall back to retroarch with the matching core (universal fallback).
-        """
-        system = SYSTEMS.get(game.system)
-        if not system:
-            return [emulator_path, game.path]
-
-        # Check if user configured custom launch args
-        custom_args = self.config.get("emulator_args", {}).get(game.system, "")
-        if custom_args:
-            return [emulator_path, custom_args.format(rom=game.path)]
-
-        # Try retroarch as universal backend
-        retroarch = self.config.emulator_defaults.get("retroarch_bin")
-        if retroarch and Path(retroarch).is_file():
-            core = self.config.get("emulator_defaults.libretro_core_dir", "/dev/null")
-            core_file = self._get_libretro_core(game.system)
-            if core_file:
-                return [
-                    retroarch,
-                    "-l", core_file,
-                    game.path,
-                ]
-
-        # No retroarch fallback — just emulator + ROM
-        return [emulator_path, game.path]
-
-    def _get_libretro_core(self, system: str) -> Optional[str]:
-        """Return the libretro core binary path for a system."""
-        system_to_core = {
-            "snes": "snes9x",
-            "gba": "mgba",
-            "gbc": "mgba",
-            "gb": "mgba",
-            "nds": "melonds",
-            "ps1": "pcsx_rearmed",
-            "psp": "ppsspp",  # not libretro by default
-            "wii": "dolphin",  # not libretro
-            "dreamcast": "flycast",
-            "n64": "mupen64plus",
-            "arcade": "mame",
-        }
-        core_name = system_to_core.get(system)
-        if not core_name:
+        system = get_system(system_id)
+        if not system or not system.default_core:
             return None
 
-        core_dir = self.config.emulator_defaults.get("libretro_core_dir")
-        if not core_dir:
+        return shutil.which(system.default_core)
+
+    def resolve_core(self, system_id: str) -> Optional[str]:
+        """Find a libretro core for a system, if RetroArch is configured."""
+        if not self.libretro_core_dir:
             return None
 
-        for ext in (".so", ".dll", ".dylib"):
-            candidate = Path(core_dir) / f"{core_name}{ext}"
-            if candidate.exists():
+        system = get_system(system_id)
+        if not system or not system.default_core:
+            return None
+
+        directory = Path(self.libretro_core_dir)
+        for suffix in (".so", ".dll", ".dylib"):
+            candidate = directory / f"{system.default_core}_libretro{suffix}"
+            if candidate.is_file():
                 return str(candidate)
 
         return None
 
-    # ── Store game launchers ────────────────────────────────────
+    # ── Launching ─────────────────────────────────────────────────
 
-    def _launch_store_game(self, game: GameEntry) -> Optional[EmulatorProcess]:
-        """Launch games from Steam, Heroic, or GOG."""
-        cmd = [game.path]
-        if game.is_steam:
-            # Use steam://run/<appid>
-            app_id = game.metadata.get("steam_app_id")
-            if app_id:
-                cmd = ["steam", f"steam://run/{app_id}"]
-        # For Heroic/GOG, game.path should already be the launcher or binary
-        env = self._setup_env()
-        proc = subprocess.Popen(cmd, env=env, start_new_session=platform.system() != "Windows")
-        return EmulatorProcess(proc)
+    def launch(
+        self,
+        game_id: int,
+        *,
+        launch_option_id: Optional[int] = None,
+        on_exit: Optional[Callable[[int, int], None]] = None,
+    ) -> GameProcess:
+        """Launch a game. Returns immediately with a handle to the process.
 
-    # ── Helpers ─────────────────────────────────────────────────
+        `on_exit`, if given, is called as (game_id, seconds_played) once the
+        game closes. Playtime is recorded automatically for launches that can
+        be timed.
+        """
+        game = self.library.get(game_id)
+        if game is None:
+            raise LaunchError(f"Game {game_id} is not in the library.")
 
-    def _find_on_path(self, name: str) -> Optional[str]:
-        """Find an executable in PATH."""
-        import shutil
-        return shutil.which(name)
+        options = self.library.launch_options_for(game_id)
+        if not options:
+            raise LaunchError(f"{game.title} has no way to launch configured.")
 
-    def _setup_env(self) -> dict:
-        """Environment setup for emulator processes."""
-        env = os.environ.copy()
-        env["SDL_VIDEODRIVER"] = "x11" or env.get("SDL_VIDEODRIVER", "")
-        env["EGL_LOG_LEVEL"] = "debug"  # verbose log if needed
-        return env
+        if launch_option_id is not None:
+            option = next((o for o in options if o["id"] == launch_option_id), None)
+            if option is None:
+                raise LaunchError("That launch option no longer exists.")
+        else:
+            option = options[0]  # ordered primary-first
+
+        target = option["target"]
+        kind = option["kind"]
+
+        # A missing file is the most common failure; say so plainly rather than
+        # letting the emulator fail with its own opaque message.
+        if kind == "emulator" and not Path(target).exists():
+            raise LaunchError(
+                f"The file for {game.title} is missing:\n{target}\n\n"
+                "It may be on a drive that is not connected."
+            )
+
+        profile = self.profiles.for_game(option)
+
+        missing = profile.missing_tools()
+        if missing:
+            logger.warning(
+                "profile %s wants tools that are not installed: %s",
+                profile.name, ", ".join(missing),
+            )
+
+        command = build_command(
+            kind=kind,
+            target=target,
+            profile=profile,
+            emulator=option["emulator"],
+            emulator_path=self.resolve_emulator(game.system) if kind == "emulator" else None,
+            args=option["args"],
+            system=game.system,
+            retroarch_path=self.retroarch_path,
+            core_path=self.resolve_core(game.system) if kind == "emulator" else None,
+        )
+
+        env = profile.environment(dict(os.environ))
+
+        if profile.pre_launch:
+            self._run_hook(profile.pre_launch, env)
+
+        logger.info("launching %s: %s", game.title, " ".join(command))
+
+        try:
+            process = subprocess.Popen(
+                command,
+                env=env,
+                cwd=option["working_dir"] or None,
+                # Own process group, so terminate() reaches forked helpers.
+                start_new_session=True,
+            )
+        except FileNotFoundError as exc:
+            raise LaunchError(f"Could not run {command[0]}: not found on this system.") from exc
+        except PermissionError as exc:
+            raise LaunchError(f"Not permitted to run {command[0]}.") from exc
+
+        tracks = kind not in HANDOFF_KINDS
+        session_id = (
+            self.library.start_session(game_id, option["id"]) if tracks else None
+        )
+
+        running = GameProcess(
+            process=process,
+            game_id=game_id,
+            session_id=session_id,
+            tracks_playtime=tracks,
+            command=command,
+        )
+        self.running[game_id] = running
+
+        self._watch(running, profile, env, on_exit)
+        return running
+
+    def _watch(
+        self,
+        running: GameProcess,
+        profile: LaunchProfile,
+        env: dict[str, str],
+        on_exit: Optional[Callable[[int, int], None]],
+    ) -> None:
+        """Wait for the game in the background and close out its session."""
+
+        def wait_and_finish() -> None:
+            running.process.wait()
+
+            seconds = 0
+            if running.session_id is not None:
+                seconds = self.library.end_session(running.session_id)
+
+            self.running.pop(running.game_id, None)
+
+            if profile.post_exit:
+                self._run_hook(profile.post_exit, env)
+
+            if on_exit:
+                try:
+                    on_exit(running.game_id, seconds)
+                except Exception:
+                    logger.exception("on_exit callback failed")
+
+        # Daemon: a game still running must not keep GameLab from quitting.
+        threading.Thread(target=wait_and_finish, daemon=True).start()
+
+    @staticmethod
+    def _run_hook(command: str, env: dict[str, str]) -> None:
+        """Run a pre-launch or post-exit shell hook.
+
+        Failures are logged and ignored: a broken hook should not stop a game
+        from starting, or wedge the launcher after it exits.
+        """
+        try:
+            subprocess.run(command, shell=True, env=env, timeout=30, check=False)
+        except subprocess.TimeoutExpired:
+            logger.warning("hook timed out: %s", command)
+        except Exception:
+            logger.exception("hook failed: %s", command)
+
+    # ── Running games ─────────────────────────────────────────────
+
+    def is_running(self, game_id: int) -> bool:
+        running = self.running.get(game_id)
+        return running is not None and running.is_running
+
+    def stop(self, game_id: int) -> None:
+        running = self.running.get(game_id)
+        if running:
+            running.terminate()
+
+    def stop_all(self) -> None:
+        for running in list(self.running.values()):
+            running.terminate()
