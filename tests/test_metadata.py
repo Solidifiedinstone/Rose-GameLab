@@ -335,16 +335,21 @@ def test_empty_metadata_is_detected():
 # ── Scraper ───────────────────────────────────────────────────────
 
 @pytest.fixture
-def scraper(library, cache):
+def scraper(library, cache, tmp_path):
     session = FakeSession()
     session.route("appdetails", FakeResponse(payload=steam_payload(1145360)))
     session.route("library_600x900", FakeResponse(content=JPEG))
+
+    from rose_gamelab.metadata.openvgdb import OpenVGDBProvider
 
     return Scraper(
         library,
         cache=cache,
         steam=SteamStoreProvider(session=session, rate_limit=0),
         libretro=LibretroArtProvider(session=FakeSession(), rate_limit=0),
+        # Pointed at a path that does not exist, so these tests never depend on
+        # whether the real offline database has been downloaded on this machine.
+        openvgdb=OpenVGDBProvider(tmp_path / "absent.sqlite"),
     )
 
 
@@ -437,13 +442,15 @@ def test_scrape_can_be_cancelled_mid_run(library, scraper):
     assert state.remaining == 3
 
 
-def test_cancelled_scrape_keeps_what_it_found(library, cache):
+def test_cancelled_scrape_keeps_what_it_found(library, cache, tmp_path):
     """Interrupting must not discard completed work."""
     session = FakeSession()
     session.route("appdetails", FakeResponse(payload=steam_payload(1145360)))
 
+    from rose_gamelab.metadata.openvgdb import OpenVGDBProvider
     scraper = Scraper(library, cache=cache, steam=SteamStoreProvider(session=session, rate_limit=0),
-                      libretro=LibretroArtProvider(session=FakeSession(), rate_limit=0))
+                      libretro=LibretroArtProvider(session=FakeSession(), rate_limit=0),
+                      openvgdb=OpenVGDBProvider(tmp_path / "absent.sqlite"))
 
     game_id = library.add_game(title="Hades", system="pc", steam_appid=1145360)
     scraper.scrape_game(game_id)
@@ -453,13 +460,15 @@ def test_cancelled_scrape_keeps_what_it_found(library, cache):
     assert library.get(game_id).release_date == "2020-09-17"
 
 
-def test_one_failure_does_not_abort_the_run(library, cache):
+def test_one_failure_does_not_abort_the_run(library, cache, tmp_path):
     class ExplodingSteam(SteamStoreProvider):
         def fetch(self, appid, **kw):
             raise RuntimeError("boom")
 
+    from rose_gamelab.metadata.openvgdb import OpenVGDBProvider
     scraper = Scraper(library, cache=cache, steam=ExplodingSteam(session=FakeSession(), rate_limit=0),
-                      libretro=LibretroArtProvider(session=FakeSession(), rate_limit=0))
+                      libretro=LibretroArtProvider(session=FakeSession(), rate_limit=0),
+                      openvgdb=OpenVGDBProvider(tmp_path / "absent.sqlite"))
 
     library.add_game(title="A", system="pc", steam_appid=1)
     library.add_game(title="B", system="pc", steam_appid=2)

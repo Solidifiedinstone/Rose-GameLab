@@ -23,6 +23,7 @@ from rose_gamelab.core.library import Library
 from rose_gamelab.metadata.base import GameMetadata, ProviderError
 from rose_gamelab.metadata.cache import ArtCache
 from rose_gamelab.metadata.libretro_art import LibretroArtProvider
+from rose_gamelab.metadata.openvgdb import OpenVGDBProvider
 from rose_gamelab.metadata.steam_store import SteamStoreProvider
 
 logger = logging.getLogger(__name__)
@@ -54,11 +55,15 @@ class Scraper:
         cache: Optional[ArtCache] = None,
         steam: Optional[SteamStoreProvider] = None,
         libretro: Optional[LibretroArtProvider] = None,
+        openvgdb: Optional[OpenVGDBProvider] = None,
     ) -> None:
         self.library = library
         self.cache = cache or ArtCache()
         self.steam = steam or SteamStoreProvider()
         self.libretro = libretro or LibretroArtProvider()
+        # Optional: only used once the user has downloaded the offline
+        # database. Everything still works without it, just less precisely.
+        self.openvgdb = openvgdb or OpenVGDBProvider()
         self._cancel = threading.Event()
 
     # ── Control ───────────────────────────────────────────────────
@@ -128,7 +133,43 @@ class Scraper:
             except ProviderError as exc:
                 logger.warning("Steam metadata failed for %s: %s", game.title, exc)
 
+        # Emulated games: identify by content hash. This is the only source of
+        # metadata (as opposed to art) for retro titles, and it is exact where
+        # filename matching is a guess.
+        identification = self._identify_rom(game)
+        if identification is not None:
+            result = result.merge(identification.metadata) if result else identification.metadata
+
+            # An exact hash match knows the real title better than the
+            # filename does. A filename match does not, so it never renames.
+            if identification.exact and identification.title != game.title:
+                self.library.update_game(game.id, title=identification.title)
+
         return result
+
+    def _identify_rom(self, game):
+        """Look this game's files up in the offline database by hash."""
+        if not self.openvgdb.available():
+            return None
+
+        for row in self.library.files_for(game.id):
+            if not (row["sha1"] or row["md5"] or row["crc32"]):
+                continue
+            try:
+                found = self.openvgdb.identify(
+                    sha1=row["sha1"],
+                    md5=row["md5"],
+                    crc32=row["crc32"],
+                    filename=Path(row["path"]).name,
+                )
+            except ProviderError as exc:
+                logger.warning("offline lookup failed for %s: %s", game.title, exc)
+                return None
+
+            if found is not None:
+                return found
+
+        return None
 
     def _apply_metadata(self, game, metadata: GameMetadata, *, overwrite: bool) -> None:
         """Write metadata into the library, without clobbering existing values.
