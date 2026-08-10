@@ -166,6 +166,82 @@ def find_art(ctx: click.Context, scrape_all: bool) -> None:
     database.close()
 
 
+@main.command()
+@click.argument("game_id", type=int)
+@click.pass_context
+def play(ctx: click.Context, game_id: int) -> None:
+    """Launch a game by its library id, and wait for it to exit.
+
+    This is what the Steam shortcuts created by `export-steam` invoke, so a
+    game started from Steam still goes through GameLab's launch profiles and
+    playtime tracking. It blocks until the game closes so Steam's own "running"
+    state stays accurate.
+    """
+    from rich.console import Console
+
+    from rose_gamelab.core.launcher import LaunchError, Launcher
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.core.profiles import ProfileStore
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+    launcher = Launcher(library, ProfileStore(database))
+
+    try:
+        running = launcher.launch(game_id)
+    except LaunchError as exc:
+        console.print(f"[red]{exc}[/]")
+        database.close()
+        sys.exit(1)
+
+    running.wait()
+    database.close()
+
+
+@main.command("export-steam")
+@click.option("--collection", default="Rose GameLab", help="Steam library category to file games under.")
+@click.option("--system", default=None, help="Only export one system.")
+@click.option("--force", is_flag=True, help="Export even if Steam is running (not recommended).")
+@click.pass_context
+def export_steam(ctx: click.Context, collection: str, system: Optional[str], force: bool) -> None:
+    """Add library games to Steam as non-Steam shortcuts, with artwork."""
+    from rich.console import Console
+
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.sources.steam_export import SteamExporter
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+
+    # Exporting Steam games back into Steam would create duplicates of games
+    # Steam already has.
+    games = [
+        game for game in library.list_games(system=system)
+        if game.steam_appid is None
+    ]
+
+    exporter = SteamExporter()
+    try:
+        result = exporter.export(games, library, collection_name=collection, force=force)
+    except RuntimeError as exc:
+        console.print(f"[yellow]{exc}[/]")
+        database.close()
+        sys.exit(1)
+
+    console.print(
+        f"[green]{result.added} added[/], {result.updated} updated, "
+        f"{result.artwork_copied} covers copied"
+    )
+    if result.backup:
+        console.print(f"[dim]Previous shortcuts backed up to {result.backup}[/]")
+    for error in result.errors:
+        console.print(f"[yellow]{error}[/]")
+
+    database.close()
+
+
 @main.command("list")
 @click.option("--system", default=None)
 @click.option("--search", default=None)
