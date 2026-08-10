@@ -1,83 +1,64 @@
-"""Base classes and registry for emulators / system providers."""
+"""System registry and core library types.
+
+`SYSTEMS` maps a system id to what GameLab needs to know about it: what its
+ROMs look like on disk, what emulator usually runs it, and how it should be
+labelled in the interface.
+
+Extensions are declared per system rather than through a shared enum. An enum
+cannot express this correctly: two members with identical values become
+aliases for each other, so `VirtualBoy = [".vb"]` and `VBA = [".vb"]` silently
+collapsed into one member in the previous version.
+
+Note that extensions overlap heavily across systems — `.bin` and `.iso` belong
+to half a dozen platforms. Extension matching narrows the candidates; content
+hashing (see core/hashing.py) is what actually identifies a game.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 
-class RomType(Enum):
-    """Supported ROM file extensions per system."""
-    SNES = [".sfc", ".smc", ".z64"]
-    GBA = [".gba"]
-    GBC = [".gbc"]
-    GB = [".gb"]
-    NDS = [".nds", ".ds"]
-    IPS = [".ips"]  # patch
-    PS1 = [".bin", ".img", ".ccd", ".iso", ".cue"]
-    PS2 = [".bin", ".iso", ".chd"]
-    PSP = [".elf", ".prx", ".pbp"]
-    Wii = [".iso", ".wbfs", ".ciso"]
-    WiiU = [".czp", ".rpx"]
-    Switch = [".nro", ".nso", ".nsp", ".xci"]
-    N64 = [".n64", ".z64", ".v64"]
-    Xbox = [".xbe"]
-    Dreamcast = [".binary", ".bi0"]
-    PS4 = [".elf", ".bin", ".ps4"]
-    PS3 = [".elf", ".prx", ".self"]
-    Arcade = [".zip"]
-    VBA = [".vb"]
-    Atari2600 = [".bin"]
-    FDS = [".fds"]
-    MasterSystem = [".sms", ".md", ".sgd"]
-    SegaSat = [".cdi", ".cue"]
-    PC_Engine = [".img", ".ccd"]
-    Genesis = [".smd", ".gen", ".md", ".bin"]
-    MSX = [".rom", ".msx"]
-    VirtualBoy = [".vb"]
-    Unknown = []
-
-    @classmethod
-    def from_extension(cls, ext: str) -> Optional["RomType"]:
-        ext_lower = ext.lower() if ext else ""
-        for rt in cls:
-            if rt != cls.Unknown and ext_lower in rt.value:
-                return rt
-        return None
-
-    @property
-    def extensions(self) -> list[str]:
-        return self.value
-
-
-@dataclass
+@dataclass(frozen=True)
 class EmulatorDef:
     """Metadata about an emulated system."""
-    id: str                       # e.g. "snes", "gba"
-    name: str                     # e.g. "Super Nintendo", "Game Boy Advance"
-    icon: str = ""                # emoji or icon name
-    rom_extensions: list[str] = field(default_factory=list)
-    default_core: str = ""         # e.g. "snes9x", "mgba"
-    launch_args_template: str = "" # template for building launch command
-    needs_controller: bool = True  # most emulators benefit from controller input
+
+    id: str
+    name: str
+    icon: str = ""
+    rom_extensions: tuple[str, ...] = ()
+    default_core: str = ""          # RetroArch core or standalone emulator id
+    manufacturer: str = ""
+    year: Optional[int] = None
+    # Systems whose games are disc images tend to arrive as multi-file rips and
+    # benefit from cuesheet handling and m3u playlists.
+    disc_based: bool = False
 
     def matches_rom(self, path: Path) -> bool:
-        return path.suffix.lower() in self.rom_extensions or len(self.rom_extensions) == 0
+        """Whether a file could plausibly be a ROM for this system.
+
+        A system with no declared extensions matches nothing — it must not
+        match everything, or one misconfigured entry swallows the library.
+        """
+        if not self.rom_extensions:
+            return False
+        return path.suffix.lower() in self.rom_extensions
 
 
 @dataclass
 class GameEntry:
-    """A single game/ROM entry in the library."""
-    id: str                              # unique ID (folder+filename hash)
-    name: str                            # display name
-    system: str                          # system ID (e.g. "snes")
-    path: str                            # path to ROM or executable
-    cover_art: str = ""                  # optional local path to cover image
-    metadata: dict = field(default_factory=dict)  # last_played, play_count, custom notes, etc.
-    source: str = ""                     # where it came from (source ID)
-    is_steam: bool = False               # whether it's a Steam game, not a ROM
+    """A game discovered by a source, before it enters the library database."""
+
+    id: str
+    name: str
+    system: str
+    path: str
+    cover_art: str = ""
+    metadata: dict = field(default_factory=dict)
+    source: str = ""
+    is_steam: bool = False
     is_heroic: bool = False
     is_gog: bool = False
 
@@ -90,63 +71,205 @@ class GameEntry:
         return self.metadata.get("play_count", 0)
 
 
-# ── Registry ───────────────────────────────────────────────────
+# ── Registry ──────────────────────────────────────────────────────
+
+def _system(
+    id: str,
+    name: str,
+    icon: str,
+    extensions: tuple[str, ...],
+    core: str = "",
+    manufacturer: str = "",
+    year: Optional[int] = None,
+    disc_based: bool = False,
+) -> EmulatorDef:
+    return EmulatorDef(
+        id=id, name=name, icon=icon, rom_extensions=extensions,
+        default_core=core, manufacturer=manufacturer, year=year,
+        disc_based=disc_based,
+    )
+
 
 SYSTEMS: dict[str, EmulatorDef] = {
-    "snes": EmulatorDef(id="snes", name="Super Nintendo", icon="🎮",
-                        rom_extensions=RomType.SNES.extensions, default_core="snes9x"),
-    "gba": EmulatorDef(id="gba", name="Game Boy Advance", icon="🕹️",
-                       rom_extensions=RomType.GBA.extensions, default_core="mgba"),
-    "gbc": EmulatorDef(id="gbc", name="Game Boy Color", icon="🕹️",
-                       rom_extensions=RomType.GBC.extensions, default_core="mgba"),
-    "gb": EmulatorDef(id="gb", name="Game Boy", icon="🕹️",
-                      rom_extensions=RomType.GB.extensions, default_core="mgba"),
-    "nds": EmulatorDef(id="nds", name="Nintendo DS", icon="📱",
-                       rom_extensions=RomType.NDS.extensions, default_core="melonds"),
-    "ps1": EmulatorDef(id="ps1", name="PlayStation", icon="🎮",
-                       rom_extensions=RomType.PS1.extensions, default_core="dxvk-psx"),
-    "ps2": EmulatorDef(id="ps2", name="PlayStation 2", icon="🎮",
-                       rom_extensions=RomType.PS2.extensions, default_core="pcsx2"),
-    "psp": EmulatorDef(id="psp", name="PlayStation Portable", icon="🎮",
-                       rom_extensions=RomType.PSP.extensions, default_core="ppsspp"),
-    "3ds": EmulatorDef(id="3ds", name="Nintendo 3DS", icon="📱",
-                       rom_extensions=[".3ds", ".cxi", ".ncp", ".ncf"], default_core="citra"),
-    "wii": EmulatorDef(id="wii", name="Nintendo Wii", icon="📺",
-                       rom_extensions=RomType.Wii.extensions, default_core="dolphin"),
-    "wiiu": EmulatorDef(id="wiiu", name="Nintendo Wii U", icon="📺",
-                        rom_extensions=RomType.WiiU.extensions, default_core="cemu"),
-    "switch": EmulatorDef(id="switch", name="Nintendo Switch", icon="🎮",
-                          rom_extensions=RomType.Switch.extensions, default_core="ryujinx"),
-    "xbox": EmulatorDef(id="xbox", name="Xbox Original", icon="🎮",
-                        rom_extensions=RomType.Xbox.extensions, default_core="xemu"),
-    "dreamcast": EmulatorDef(id="dreamcast", name="Sega Dreamcast", icon="💿",
-                             rom_extensions=RomType.Dreamcast.extensions, default_core="flycast"),
-    "ps4": EmulatorDef(id="ps4", name="PlayStation 4", icon="🎮",
-                       rom_extensions=RomType.Unknown.extensions, default_core="shadps4"),
-    "ps3": EmulatorDef(id="ps3", name="PlayStation 3", icon="🎮",
-                       rom_extensions=RomType.Unknown.extensions, default_core="rpcs3"),
-    "xenia": EmulatorDef(id="xenia", name="Xbox 360", icon="🎮",
-                         rom_extensions=RomType.Unknown.extensions, default_core="xenia_canary"),
-    "n64": EmulatorDef(id="n64", name="Nintendo 64", icon="🎮",
-                       rom_extensions=RomType.N64.extensions, default_core="para64"),
-    "vba": EmulatorDef(id="vba", name="Virtual Boy", icon="🔴",
-                       rom_extensions=RomType.VBA.extensions, default_core="vbam"),
-    "atari2600": EmulatorDef(id="atari2600", name="Atari 2600", icon="👾",
-                             rom_extensions=RomType.Atari2600.extensions, default_core="stella"),
-    "fds": EmulatorDef(id="fds", name="Famicom Disk System", icon="💾",
-                       rom_extensions=RomType.FDS.extensions, default_core="fceux"),
-    "master_system": EmulatorDef(id="master_system", name="Sega Master System", icon="🕹️",
-                                 rom_extensions=RomType.MasterSystem.extensions, default_core="genesis_plus_gx"),
-    "megadrive": EmulatorDef(id="megadrive", name="Sega Mega Drive / Genesis", icon="🕹️",
-                             rom_extensions=RomType.Genesis.extensions, default_core="genesis_plus_gx"),
-    "pc_engine": EmulatorDef(id="pc_engine", name="TurboGrafx-16 / PC Engine", icon="💿",
-                             rom_extensions=RomType.PC_Engine.extensions, default_core="mednafen_pce"),
-    "sega_sat": EmulatorDef(id="sega_sat", name="Sega Saturn", icon="💿",
-                            rom_extensions=RomType.SegaSat.extensions, default_core="yabassan"),
-    "arcade": EmulatorDef(id="arcade", name="Arcade (NEOGEO, etc.)", icon="👾",
-                          rom_extensions=RomType.Arcade.extensions, default_core="mame"),
-    "msx": EmulatorDef(id="msx", name="MSX", icon="🖥️",
-                       rom_extensions=RomType.MSX.extensions, default_core="fmsx"),
+    # ── Nintendo ──────────────────────────────────────────────────
+    "nes": _system(
+        "nes", "Nintendo Entertainment System", "🎮",
+        (".nes", ".unf", ".unif"), "mesen", "Nintendo", 1983,
+    ),
+    "fds": _system(
+        "fds", "Famicom Disk System", "💾",
+        (".fds",), "mesen", "Nintendo", 1986,
+    ),
+    "snes": _system(
+        "snes", "Super Nintendo", "🎮",
+        (".sfc", ".smc", ".swc", ".fig", ".bs"), "snes9x", "Nintendo", 1990,
+    ),
+    "n64": _system(
+        "n64", "Nintendo 64", "🎮",
+        (".n64", ".z64", ".v64", ".ndd"), "mupen64plus_next", "Nintendo", 1996,
+    ),
+    "gc": _system(
+        "gc", "Nintendo GameCube", "💿",
+        (".gcm", ".gcz", ".rvz", ".iso", ".ciso"), "dolphin", "Nintendo", 2001,
+        disc_based=True,
+    ),
+    "wii": _system(
+        "wii", "Nintendo Wii", "📺",
+        (".wbfs", ".rvz", ".wad", ".iso", ".gcz", ".ciso"), "dolphin", "Nintendo", 2006,
+        disc_based=True,
+    ),
+    "wiiu": _system(
+        "wiiu", "Nintendo Wii U", "📺",
+        (".wud", ".wux", ".wua", ".rpx"), "cemu", "Nintendo", 2012,
+        disc_based=True,
+    ),
+    "switch": _system(
+        "switch", "Nintendo Switch", "🎮",
+        (".nsp", ".xci", ".nca", ".nro"), "ryujinx", "Nintendo", 2017,
+    ),
+    "gb": _system(
+        "gb", "Game Boy", "🕹️", (".gb",), "gambatte", "Nintendo", 1989,
+    ),
+    "gbc": _system(
+        "gbc", "Game Boy Color", "🕹️", (".gbc",), "gambatte", "Nintendo", 1998,
+    ),
+    "gba": _system(
+        "gba", "Game Boy Advance", "🕹️", (".gba", ".agb"), "mgba", "Nintendo", 2001,
+    ),
+    "nds": _system(
+        "nds", "Nintendo DS", "📱", (".nds", ".dsi", ".ids"), "melonds", "Nintendo", 2004,
+    ),
+    "3ds": _system(
+        "3ds", "Nintendo 3DS", "📱",
+        (".3ds", ".3dsx", ".cci", ".cxi", ".cia"), "azahar", "Nintendo", 2011,
+    ),
+    "virtualboy": _system(
+        "virtualboy", "Virtual Boy", "🔴", (".vb", ".vboy"), "beetle_vb", "Nintendo", 1995,
+    ),
+
+    # ── Sony ──────────────────────────────────────────────────────
+    "ps1": _system(
+        "ps1", "PlayStation", "💿",
+        (".cue", ".chd", ".pbp", ".m3u", ".ccd", ".mds", ".exe"),
+        "duckstation", "Sony", 1994, disc_based=True,
+    ),
+    "ps2": _system(
+        "ps2", "PlayStation 2", "💿",
+        (".iso", ".chd", ".cso", ".gz", ".bin", ".mdf", ".nrg"),
+        "pcsx2", "Sony", 2000, disc_based=True,
+    ),
+    "ps3": _system(
+        "ps3", "PlayStation 3", "💿",
+        (".iso", ".pkg", ".self", ".elf", ".bin"), "rpcs3", "Sony", 2006,
+        disc_based=True,
+    ),
+    "ps4": _system(
+        "ps4", "PlayStation 4", "🎮", (".pkg", ".elf", ".bin"), "shadps4", "Sony", 2013,
+    ),
+    "psp": _system(
+        "psp", "PlayStation Portable", "🎮",
+        (".iso", ".cso", ".pbp", ".chd", ".elf", ".prx"), "ppsspp", "Sony", 2004,
+    ),
+    "psvita": _system(
+        "psvita", "PlayStation Vita", "🎮", (".vpk", ".psvimg"), "vita3k", "Sony", 2011,
+    ),
+
+    # ── Microsoft ─────────────────────────────────────────────────
+    "xbox": _system(
+        "xbox", "Xbox", "🎮", (".xbe", ".iso"), "xemu", "Microsoft", 2001,
+        disc_based=True,
+    ),
+    "xbox360": _system(
+        "xbox360", "Xbox 360", "🎮", (".iso", ".xex"), "xenia", "Microsoft", 2005,
+        disc_based=True,
+    ),
+
+    # ── Sega ──────────────────────────────────────────────────────
+    "master_system": _system(
+        "master_system", "Sega Master System", "🕹️",
+        (".sms",), "genesis_plus_gx", "Sega", 1985,
+    ),
+    "megadrive": _system(
+        "megadrive", "Sega Mega Drive / Genesis", "🕹️",
+        (".md", ".gen", ".smd", ".bin", ".68k"), "genesis_plus_gx", "Sega", 1988,
+    ),
+    "segacd": _system(
+        "segacd", "Sega CD / Mega CD", "💿",
+        (".cue", ".chd", ".iso"), "genesis_plus_gx", "Sega", 1991, disc_based=True,
+    ),
+    "sega32x": _system(
+        "sega32x", "Sega 32X", "🕹️", (".32x",), "picodrive", "Sega", 1994,
+    ),
+    "saturn": _system(
+        "saturn", "Sega Saturn", "💿",
+        (".cue", ".chd", ".ccd", ".mds", ".iso"), "beetle_saturn", "Sega", 1994,
+        disc_based=True,
+    ),
+    "dreamcast": _system(
+        "dreamcast", "Sega Dreamcast", "💿",
+        (".gdi", ".cdi", ".chd", ".cue"), "flycast", "Sega", 1998, disc_based=True,
+    ),
+    "gamegear": _system(
+        "gamegear", "Sega Game Gear", "🕹️", (".gg",), "genesis_plus_gx", "Sega", 1990,
+    ),
+
+    # ── Other ─────────────────────────────────────────────────────
+    "atari2600": _system(
+        "atari2600", "Atari 2600", "👾", (".a26", ".bin"), "stella", "Atari", 1977,
+    ),
+    "atari7800": _system(
+        "atari7800", "Atari 7800", "👾", (".a78",), "prosystem", "Atari", 1986,
+    ),
+    "lynx": _system(
+        "lynx", "Atari Lynx", "👾", (".lnx", ".o"), "beetle_lynx", "Atari", 1989,
+    ),
+    "jaguar": _system(
+        "jaguar", "Atari Jaguar", "👾", (".j64", ".jag", ".rom"), "virtualjaguar", "Atari", 1993,
+    ),
+    "pc_engine": _system(
+        "pc_engine", "TurboGrafx-16 / PC Engine", "🕹️",
+        (".pce", ".sgx"), "beetle_pce", "NEC", 1987,
+    ),
+    "pc_engine_cd": _system(
+        "pc_engine_cd", "TurboGrafx-CD / PC Engine CD", "💿",
+        (".cue", ".chd", ".ccd"), "beetle_pce", "NEC", 1988, disc_based=True,
+    ),
+    "neogeo": _system(
+        "neogeo", "Neo Geo", "👾", (".zip", ".7z"), "fbneo", "SNK", 1990,
+    ),
+    "ngp": _system(
+        "ngp", "Neo Geo Pocket", "🕹️", (".ngp", ".ngc"), "beetle_ngp", "SNK", 1998,
+    ),
+    "wonderswan": _system(
+        "wonderswan", "WonderSwan", "🕹️", (".ws", ".wsc"), "beetle_wswan", "Bandai", 1999,
+    ),
+    "3do": _system(
+        "3do", "3DO", "💿", (".cue", ".chd", ".iso"), "opera", "Panasonic", 1993,
+        disc_based=True,
+    ),
+    "arcade": _system(
+        "arcade", "Arcade (MAME / FinalBurn)", "👾", (".zip", ".7z", ".chd"), "mame", "", None,
+    ),
+    "msx": _system(
+        "msx", "MSX", "🖥️", (".rom", ".mx1", ".mx2", ".dsk", ".cas"), "bluemsx", "", 1983,
+    ),
+    "c64": _system(
+        "c64", "Commodore 64", "🖥️",
+        (".d64", ".t64", ".prg", ".crt", ".tap"), "vice_x64", "Commodore", 1982,
+    ),
+    "amiga": _system(
+        "amiga", "Commodore Amiga", "🖥️",
+        (".adf", ".ipf", ".lha", ".hdf"), "puae", "Commodore", 1985,
+    ),
+    "dos": _system(
+        "dos", "MS-DOS", "🖥️", (".exe", ".com", ".bat", ".conf"), "dosbox_pure", "", 1981,
+    ),
+    "scummvm": _system(
+        "scummvm", "ScummVM", "🖥️", (".scummvm",), "scummvm", "", None,
+    ),
+
+    # ── Native PC games (Steam, GOG, Heroic, custom) ──────────────
+    "pc": _system("pc", "PC", "🖥️", (), "", "", None),
 }
 
 
@@ -155,4 +278,25 @@ def get_system(system_id: str) -> Optional[EmulatorDef]:
 
 
 def list_systems() -> list[EmulatorDef]:
-    return list(SYSTEMS.values())
+    """All systems, ordered for display: manufacturer, then release year."""
+    return sorted(
+        SYSTEMS.values(),
+        key=lambda s: (s.manufacturer or "~", s.year or 9999, s.name),
+    )
+
+
+def systems_for_extension(suffix: str) -> list[EmulatorDef]:
+    """Every system a file extension could belong to.
+
+    Returns more than one entry for ambiguous extensions like `.iso` and
+    `.bin`; the caller disambiguates by folder, by user choice, or by hash.
+    """
+    suffix = suffix.lower()
+    if not suffix.startswith("."):
+        suffix = f".{suffix}"
+    return [s for s in SYSTEMS.values() if suffix in s.rom_extensions]
+
+
+def all_rom_extensions() -> set[str]:
+    """Every extension any system recognises — used to pre-filter directory scans."""
+    return {ext for system in SYSTEMS.values() for ext in system.rom_extensions}
