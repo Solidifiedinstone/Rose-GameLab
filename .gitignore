@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Runtime data — never commit a user's library, saves, or art cache
+*.db
+*.db-journal
+settings.yaml
+config.yaml
+/cache/
+/artwork/
+/saves/
+
+# Secrets — API keys for IGDB / SteamGridDB / RetroAchievements
+.env
+secrets.yaml
