@@ -480,6 +480,10 @@ class Library:
             "steam" if entry.is_steam
             else "heroic" if entry.is_heroic
             else "gog" if entry.is_gog
+            # The provider's own id is the launch kind for everything else, so
+            # Lutris entries get kind='lutris' and reach the right handler
+            # rather than falling through to a bare exec of a URL.
+            else entry.source if entry.source in ("lutris",)
             else "native"
         )
 

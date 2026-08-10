@@ -1,45 +1,205 @@
-"""Main entry point for Rose GameLab."""
+"""Entry point for Rose GameLab."""
 
+from __future__ import annotations
+
+import logging
 import sys
 
+from pathlib import Path
+from typing import Optional
+
 import click
-from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QFont
 
-from rose_gamelab.config import Config
-from rose_gamelab.ui.app import MainWindow
+from rose_gamelab import __version__
+from rose_gamelab.db.database import DEFAULT_DB_PATH, Database
 
 
-@click.command()
-@click.option("--no-ui", is_flag=True, help="Run in headless mode (future)")
-@click.option("--version", is_flag=True, help="Show version")
-def main(version: bool, no_ui: bool) -> None:
-    """GameLab — Your games, one launcher."""
-    if version:
-        from rose_gamelab import __version__
-        print(f"GameLab v{__version__}")
-        return
+def _configure_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
 
-    # Headless mode stub
-    if no_ui:
-        print("Headless mode not yet implemented. Use the UI version.")
-        sys.exit(1)
+
+@click.group(invoke_without_command=True)
+@click.option("--database", type=click.Path(), default=None, help="Library database to use.")
+@click.option("-v", "--verbose", is_flag=True, help="Verbose logging.")
+@click.version_option(__version__, prog_name="Rose GameLab")
+@click.pass_context
+def main(ctx: click.Context, database: Optional[str], verbose: bool) -> None:
+    """Rose GameLab — every game you own, in one place."""
+    _configure_logging(verbose)
+    ctx.ensure_object(dict)
+    ctx.obj["database"] = Path(database) if database else DEFAULT_DB_PATH
+
+    # Bare `rose-gamelab` opens the interface.
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(gui)
+
+
+@main.command()
+@click.option("--big-picture", is_flag=True, help="Start in Big Picture mode.")
+@click.pass_context
+def gui(ctx: click.Context, big_picture: bool = False) -> None:
+    """Open the Rose GameLab window."""
+    from PySide6.QtWidgets import QApplication
+
+    from rose_gamelab.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("GameLab")
-    app.setOrganizationName("Rose")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationName("Rose GameLab")
+    app.setOrganizationName("Rose Open Source Endeavours")
+    app.setApplicationVersion(__version__)
 
-    # Set font (use system default for compatibility)
-    font = QFont("Sans", 12)
-    QApplication.setFont(font)
+    database = Database(ctx.obj["database"])
+    window = MainWindow(database)
 
-    # Show window
-    config = Config()
-    window = MainWindow(config)
-    window.show()
+    if big_picture:
+        window.open_big_picture()
+    else:
+        window.show()
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    database.close()
+    sys.exit(exit_code)
+
+
+@main.command()
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--system", default=None, help="System id, e.g. snes. Inferred when omitted.")
+@click.pass_context
+def scan(ctx: click.Context, folder: str, system: Optional[str]) -> None:
+    """Scan a folder of ROMs into the library."""
+    from rich.console import Console
+
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.core.scanner import RomScanner
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+    scanner = RomScanner(library)
+
+    source_id = f"roms:{Path(folder).resolve()}"
+    library.register_source(
+        source_id, name=Path(folder).name, type="rom_folder",
+        path=str(Path(folder).resolve()), system=system,
+    )
+
+    result = scanner.scan_folder(folder, system=system, source_id=source_id)
+
+    console.print(
+        f"[green]{result.imported.added} added[/], "
+        f"{result.imported.updated} updated, "
+        f"{result.imported.skipped} already known "
+        f"([dim]{result.files_seen} files, {result.games_found} games[/])"
+    )
+    for error in result.errors:
+        console.print(f"[yellow]{error}[/]")
+
+    database.close()
+
+
+@main.command("import-steam")
+@click.pass_context
+def import_steam(ctx: click.Context) -> None:
+    """Import installed Steam games."""
+    from rich.console import Console
+
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.sources.steam import SteamProvider
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+
+    provider = SteamProvider()
+    if not provider.validate():
+        console.print("[yellow]No Steam installation found.[/]")
+        database.close()
+        return
+
+    result = library.import_entries(provider.discover(), source_id="steam")
+    console.print(
+        f"[green]{result.added} added[/], {result.merged} merged into existing games, "
+        f"{result.skipped} already known"
+    )
+    database.close()
+
+
+@main.command("find-art")
+@click.option("--all", "scrape_all", is_flag=True, help="Include games that already have art.")
+@click.pass_context
+def find_art(ctx: click.Context, scrape_all: bool) -> None:
+    """Download artwork and metadata for library games."""
+    from rich.console import Console
+    from rich.progress import BarColumn, Progress, TextColumn
+
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.metadata.scraper import Scraper
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    scraper = Scraper(Library(database))
+
+    with Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        console=console,
+    ) as bar:
+        task = bar.add_task("Searching…", total=None)
+
+        def report(state, title):
+            bar.update(task, total=state.total, completed=state.processed,
+                       description=title[:40])
+
+        state = scraper.scrape_library(only_missing=not scrape_all, progress=report)
+
+    console.print(
+        f"[green]Art for {state.art_found}[/], info for {state.metadata_found}, "
+        f"nothing found for {state.not_found}"
+    )
+    for error in state.errors[:10]:
+        console.print(f"[yellow]{error}[/]")
+
+    database.close()
+
+
+@main.command("list")
+@click.option("--system", default=None)
+@click.option("--search", default=None)
+@click.pass_context
+def list_games(ctx: click.Context, system: Optional[str], search: Optional[str]) -> None:
+    """List games in the library."""
+    from rich.console import Console
+    from rich.table import Table
+
+    from rose_gamelab.core.library import Library
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+
+    games = library.list_games(system=system, search=search)
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Title")
+    table.add_column("System")
+    table.add_column("Art")
+    table.add_column("Playtime", justify="right")
+
+    for game in games:
+        table.add_row(
+            game.title,
+            game.system,
+            "yes" if game.has_cover else "—",
+            f"{game.playtime_hours} h" if game.play_seconds else "—",
+        )
+
+    console.print(table)
+    console.print(f"[dim]{len(games)} games[/]")
+    database.close()
 
 
 if __name__ == "__main__":

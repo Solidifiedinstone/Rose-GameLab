@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 # Launch kinds that hand off to another program and exit immediately, so the
 # process we spawn is not the game and cannot be timed.
-HANDOFF_KINDS = {"steam"}
+HANDOFF_KINDS = {"steam", "heroic", "lutris"}
 
 
 class LaunchError(Exception):
@@ -115,8 +115,31 @@ def build_command(
         # client, not the game.
         return command
 
-    if kind in ("native", "gog", "heroic", "custom"):
-        command = [target]
+    if kind == "heroic":
+        # Heroic games are launched by URL so Heroic itself sets up the
+        # Wine/Proton prefix, cloud saves and DLC state. Running the game's
+        # own executable directly skips all of that.
+        heroic = shutil.which("heroic")
+        command = [heroic, target] if heroic else ["xdg-open", target]
+
+    elif kind == "lutris":
+        # Lutris carries the whole runner configuration per game; only the
+        # Lutris client knows how to apply it.
+        lutris = shutil.which("lutris")
+        if lutris is None:
+            raise LaunchError(
+                "Lutris is not installed, so this game cannot be launched. "
+                "Install Lutris, or add another launch option for it."
+            )
+        command = [lutris, target]
+
+    elif kind in ("native", "gog", "custom"):
+        # A URL that slipped through as 'native' still needs a handler rather
+        # than being exec'd as a file path.
+        if "://" in target or target.startswith(("lutris:", "heroic:")):
+            command = ["xdg-open", target]
+        else:
+            command = [target]
 
     elif kind == "emulator":
         if core_path and retroarch_path:
