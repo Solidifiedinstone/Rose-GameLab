@@ -216,6 +216,54 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         END;
         """,
     ),
+    (
+        2,
+        "retroachievements: achievements table and RA identity on games",
+        """
+        -- ── Achievements ────────────────────────────────────────────
+        -- One row per achievement per game, carrying this user's progress.
+        -- Achievement definitions and progress are stored together because
+        -- GameLab is single-user: there is no second player whose progress
+        -- would need a separate row against the same definition.
+        --
+        -- `earned_at` NULL means "not earned" — that is the only unearned
+        -- marker, so there is no separate boolean to keep in sync with it.
+        -- `hardcore` records that the award was earned with savestates and
+        -- cheats disabled, which RetroAchievements tracks as a stricter,
+        -- separate award rather than as a different achievement.
+        --
+        -- No credentials live here. The RA username and API key are read
+        -- from the config file; the database is a plain file users copy
+        -- around and must never carry a key.
+        CREATE TABLE achievements (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            ra_id       INTEGER NOT NULL,       -- RetroAchievements achievement id
+            title       TEXT NOT NULL,
+            description TEXT,
+            points      INTEGER NOT NULL DEFAULT 0,
+            badge_url   TEXT,
+            earned_at   TEXT,                   -- ISO 8601, NULL when unearned
+            hardcore    INTEGER NOT NULL DEFAULT 0,
+
+            -- Lets a refresh upsert instead of duplicating the whole set.
+            UNIQUE (game_id, ra_id)
+        );
+
+        CREATE INDEX idx_achievements_game ON achievements(game_id);
+
+        -- ── RA identity on games ────────────────────────────────────
+        -- `ra_hash` is RetroAchievements' own per-console hash, NOT any of
+        -- the checksums in game_files: RA hashes console-specific ROM data,
+        -- so the two are different values for the same file and must not be
+        -- confused. Stored so a re-match does not need to re-read the ROM.
+        ALTER TABLE games ADD COLUMN ra_game_id INTEGER;
+        ALTER TABLE games ADD COLUMN ra_hash    TEXT;
+
+        CREATE INDEX idx_games_ra_id   ON games(ra_game_id);
+        CREATE INDEX idx_games_ra_hash ON games(ra_hash);
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)

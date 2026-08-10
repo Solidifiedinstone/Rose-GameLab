@@ -101,8 +101,17 @@ class Database:
             try:
                 self.conn.executescript(script)
             except Exception as exc:
+                # execute(), NOT executescript(): executescript issues an
+                # implicit COMMIT before running its payload, so rolling back
+                # through it would commit the half-applied migration and then
+                # fail with "no transaction is active", masking the real error.
                 if self.conn.in_transaction:
-                    self.conn.executescript("ROLLBACK;")
+                    try:
+                        self.conn.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        # Already unwound by SQLite; the original failure is
+                        # what matters and is re-raised below.
+                        pass
                 raise RuntimeError(
                     f"migration {version} ({description}) failed; "
                     f"database left at version {self.version}"

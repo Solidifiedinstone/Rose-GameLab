@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 
 from rose_gamelab.db.database import Database, utc_now
-from rose_gamelab.db.migrations import SCHEMA_VERSION
+from rose_gamelab.db.migrations import MIGRATIONS, SCHEMA_VERSION
 
 
 @pytest.fixture
@@ -52,8 +52,96 @@ def test_expected_tables_exist(db):
     assert {
         "games", "game_files", "sources", "launch_options", "launch_profiles",
         "play_sessions", "collections", "collection_games", "tags", "game_tags",
-        "saves",
+        "saves", "achievements",
     } <= names
+
+
+def test_migrations_are_append_only_and_contiguous(db):
+    """A renumbered or edited migration silently skips upgrades for anyone
+    whose database already recorded that version."""
+    versions = [version for version, _, _ in MIGRATIONS]
+    assert versions == sorted(versions)
+    assert versions == list(range(1, len(versions) + 1))
+
+
+def test_upgrading_from_version_1_applies_every_later_migration(tmp_path):
+    """Fresh databases never exercise the upgrade path real users take."""
+    path = tmp_path / "old.db"
+    _, _, first_sql = MIGRATIONS[0]
+
+    conn = sqlite3.connect(str(path), isolation_level=None)
+    conn.executescript(f"BEGIN;\n{first_sql}\nPRAGMA user_version = 1;\nCOMMIT;")
+    conn.execute(
+        "INSERT INTO games (title, sort_title, system, added_at)"
+        " VALUES ('Chrono Trigger', 'chrono trigger', 'snes', ?)",
+        (utc_now(),),
+    )
+    conn.close()
+
+    upgraded = Database(path)
+    try:
+        assert upgraded.version == SCHEMA_VERSION
+        assert upgraded.migrate() == 0
+        # Pre-existing data survives the upgrade untouched.
+        assert upgraded.query_one("SELECT title FROM games")["title"] == "Chrono Trigger"
+    finally:
+        upgraded.close()
+
+
+def _with_broken_migration(path, sql: str):
+    """Open `path` with one extra, failing migration appended. Returns the error."""
+    # database.py binds MIGRATIONS at import time, so the patch must target
+    # that name rather than the migrations module's.
+    from rose_gamelab.db import database as database_module
+
+    broken = MIGRATIONS + [(SCHEMA_VERSION + 1, "broken", sql)]
+    original = database_module.MIGRATIONS
+    try:
+        database_module.MIGRATIONS = broken
+        with pytest.raises(Exception) as excinfo:
+            Database(path)
+        return excinfo.value
+    finally:
+        database_module.MIGRATIONS = original
+
+
+def test_a_failing_migration_does_not_advance_the_version(tmp_path):
+    path = tmp_path / "library.db"
+    Database(path).close()
+
+    _with_broken_migration(path, "CREATE TABLE oops (")
+
+    reopened = Database(path)
+    try:
+        assert reopened.version == SCHEMA_VERSION
+    finally:
+        reopened.close()
+
+
+def test_a_failing_migration_leaves_no_partial_schema_behind(tmp_path):
+    """An interrupted upgrade must roll back, not half-apply.
+
+    Regression: the rollback path used executescript('ROLLBACK;'), but
+    executescript issues an implicit COMMIT first — so a failed migration
+    committed its partial schema, the ROLLBACK then raised "no transaction
+    is active", and the next open failed on "table already exists"
+    forever. The fix is execute(), which has no implicit commit.
+    """
+    path = tmp_path / "library.db"
+    Database(path).close()
+
+    error = _with_broken_migration(
+        path, "CREATE TABLE half_applied (x);\nCREATE TABLE oops ("
+    )
+    assert isinstance(error, RuntimeError), "should report which migration failed"
+
+    reopened = Database(path)
+    try:
+        assert reopened.query_one(
+            "SELECT name FROM sqlite_master WHERE name = 'half_applied'"
+        ) is None
+    finally:
+        reopened.close()
 
 
 def test_creates_parent_directory(tmp_path):
