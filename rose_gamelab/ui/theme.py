@@ -22,12 +22,12 @@ from pathlib import Path
 RADIUS_LARGE = 18
 RADIUS = 12
 RADIUS_SMALL = 8
-SPACING = 12
+SPACING = 18
 
 # Cover art is 2:3, the standard portrait box-art ratio Steam and every
 # thumbnail archive use.
 COVER_RATIO = 3 / 2
-COVER_WIDTHS = {"small": 120, "medium": 160, "large": 200, "huge": 260}
+COVER_WIDTHS = {"small": 140, "medium": 180, "large": 230, "huge": 290}
 
 
 @dataclass
@@ -240,7 +240,7 @@ def stylesheet(theme: Theme) -> str:
         background-color: transparent;
         border: none;
         border-radius: {RADIUS}px;
-        padding: 9px 12px;
+        padding: 10px 14px;
         text-align: left;
     }}
 
@@ -254,13 +254,28 @@ def stylesheet(theme: Theme) -> str:
         font-weight: 600;
     }}
 
+    QPushButton#SidebarToggle {{
+        background-color: {theme.elevated};
+        color: {theme.text};
+        border: none;
+        border-bottom: 1px solid {theme.border};
+        border-radius: 0px;
+        font-size: 18px;
+        padding: 0px;
+    }}
+
+    QPushButton#SidebarToggle:hover {{
+        background-color: {theme.accent};
+        color: {theme.background};
+    }}
+
     /* ── Inputs ─────────────────────────────────────────────── */
 
     QLineEdit {{
         background-color: {theme.panel};
         border: 1px solid {theme.border};
         border-radius: {RADIUS}px;
-        padding: 8px 14px;
+        padding: 9px 16px;
         selection-background-color: {theme.accent_muted};
     }}
 

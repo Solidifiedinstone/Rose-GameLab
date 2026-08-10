@@ -331,17 +331,13 @@ class SettingsDialog(QDialog):
     # ── About ─────────────────────────────────────────────────────
 
     def _about_tab(self) -> QWidget:
-        from rose_gamelab.ui.branding import rose_html
+        from rose_gamelab.ui.branding import rose_widget
 
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        rose = QLabel()
-        rose.setTextFormat(Qt.TextFormat.RichText)
-        rose.setText(rose_html())
-        rose.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(rose)
+        layout.addWidget(rose_widget())
 
         text = QLabel(
             "<h2>Rose GameLab</h2>"

@@ -31,11 +31,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rose_gamelab.ui.branding import rose_html
+from rose_gamelab.ui.branding import rose_widget
 from rose_gamelab.ui.theme import Theme
 
-COLLAPSED_WIDTH = 62
-EXPANDED_WIDTH = 232
+COLLAPSED_WIDTH = 46
+EXPANDED_WIDTH = 248
 ANIMATION_MS = 220
 
 
@@ -138,9 +138,10 @@ class Sidebar(QFrame):
         # be closed again — the previous implementation hid this on expand and
         # became a one-way door.
         self.toggle = QPushButton("☰")
-        self.toggle.setObjectName("SidebarItem")
+        self.toggle.setObjectName("SidebarToggle")
         self.toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.toggle.setMinimumHeight(42)
+        self.toggle.setToolTip("Show menu")
+        self.toggle.setMinimumHeight(46)
         self.toggle.clicked.connect(self.toggle_expanded)
         outer.addWidget(self.toggle)
 
@@ -160,8 +161,7 @@ class Sidebar(QFrame):
 
         # Sections are created first because add_item() anchors new rows
         # relative to the systems heading.
-        library_section = self._add_section("Library")
-        library_section.show()
+        self._library_section = self._add_section("Library")
         self._systems_section = self._add_section("Systems")
         self._sources_section = self._add_section("Sources")
 
@@ -188,14 +188,12 @@ class Sidebar(QFrame):
         ):
             button = SidebarItem(icon, label)
             button.setCheckable(False)
+            button.setVisible(False)   # collapsed by default
             button.clicked.connect(signal.emit)
             self._items.append(button)
             footer.addWidget(button)
 
-        self.rose = QLabel()
-        self.rose.setTextFormat(Qt.TextFormat.RichText)
-        self.rose.setText(rose_html())
-        self.rose.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.rose = rose_widget()
         self.rose.setContentsMargins(0, 10, 0, 8)
         self.rose.hide()  # only shown when expanded; it does not fit the rail
         footer.addWidget(self.rose)
@@ -221,6 +219,7 @@ class Sidebar(QFrame):
     ) -> SidebarItem:
         item = SidebarItem(icon, label, key=key, count=count)
         item.set_expanded(self._expanded)
+        item.setVisible(self._expanded)
         item.setChecked(checked)
         item.clicked.connect(lambda _=False, k=key: self.filter_selected.emit(k))
 
@@ -258,12 +257,16 @@ class Sidebar(QFrame):
                 self.content.removeWidget(item)
                 item.deleteLater()
 
-        section.setVisible(bool(entries))
+        # Headings only render when expanded — at the collapsed width they
+        # clip mid-word ("SYSTE").
+        section.setVisible(bool(entries) and self._expanded)
+        section.setProperty("has_items", bool(entries))
 
         anchor_index = self.content.indexOf(section) + 1
         for offset, (key, icon, label, count) in enumerate(entries):
             item = SidebarItem(icon, label, key=f"{prefix}:{key}", count=count)
             item.set_expanded(self._expanded)
+            item.setVisible(self._expanded)
             item.clicked.connect(
                 lambda _=False, k=f"{prefix}:{key}": self.filter_selected.emit(k)
             )
@@ -286,14 +289,15 @@ class Sidebar(QFrame):
 
         self._expanded = expanded
 
-        # Labels appear immediately on expand so text does not pop in at the
-        # end, and disappear immediately on collapse so it never overflows the
-        # shrinking rail.
+        # Collapsed, the rail shows NOTHING but the toggle. A column of icons
+        # the user cannot read is noise, not navigation — so entries are hidden
+        # outright rather than squeezed. Content is applied immediately in both
+        # directions so nothing pops in late or overflows the shrinking panel.
         for item in self._items:
             item.set_expanded(expanded)
+            item.setVisible(expanded)
         for section in self._sections:
-            if section.isVisible() or expanded:
-                section.setVisible(expanded and self._section_has_items(section))
+            section.setVisible(expanded and self._section_has_items(section))
 
         self.rose.setVisible(expanded)
 
@@ -303,6 +307,7 @@ class Sidebar(QFrame):
         self._animation.start()
 
     def _section_has_items(self, section: SidebarSection) -> bool:
+        """Whether a heading has any rows under it. An empty heading is noise."""
         index = self.content.indexOf(section)
         following = self.content.itemAt(index + 1)
         widget = following.widget() if following else None

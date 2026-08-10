@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
 
 from rose_gamelab.ui.theme import COVER_RATIO, RADIUS, SPACING, Theme
 
-PANEL_WIDTH = 320
-DETAIL_COVER_WIDTH = 200
+PANEL_WIDTH = 360
+DETAIL_COVER_WIDTH = 240
 
 
 class DetailPanel(QFrame):
@@ -69,14 +69,18 @@ class DetailPanel(QFrame):
         self.cover.setFixedHeight(int(DETAIL_COVER_WIDTH * COVER_RATIO))
         self.body.addWidget(self.cover)
 
+        # Title and subtitle sit centred under the cover, which is itself
+        # centred — left-aligning them against a centred image looks unmoored.
         self.title = QLabel()
         self.title.setObjectName("Heading")
         self.title.setWordWrap(True)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.body.addWidget(self.title)
 
         self.subtitle = QLabel()
         self.subtitle.setObjectName("Subtle")
         self.subtitle.setWordWrap(True)
+        self.subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.body.addWidget(self.subtitle)
 
         self.summary = QLabel()

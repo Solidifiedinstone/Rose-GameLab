@@ -29,13 +29,21 @@ STORE_API = "https://store.steampowered.com/api/appdetails"
 # Steam library grid, which is the shape GameLab's cover grid wants.
 CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps"
 ART_URLS = {
-    "cover": (f"{CDN}/{{appid}}/library_600x900_2x.jpg", f"{CDN}/{{appid}}/library_600x900.jpg"),
-    "hero": (f"{CDN}/{{appid}}/library_hero.jpg",),
-    "logo": (f"{CDN}/{{appid}}/logo.png",),
+    "cover": (
+        f"{CDN}/{{appid}}/library_600x900_2x.jpg",
+        f"{CDN}/{{appid}}/library_600x900.jpg",
+        # Older titles predate the portrait capsule. A landscape header is not
+        # the right shape, but it beats an empty tile.
+        f"{CDN}/{{appid}}/capsule_616x353.jpg",
+        f"{CDN}/{{appid}}/header.jpg",
+    ),
+    "hero": (f"{CDN}/{{appid}}/library_hero.jpg", f"{CDN}/{{appid}}/page_bg_generated_v6b.jpg"),
+    "logo": (f"{CDN}/{{appid}}/logo.png", f"{CDN}/{{appid}}/logo_2x.png"),
 }
 
 # Requests per second. Deliberately conservative.
-RATE_LIMIT = 1.5
+RATE_LIMIT = 1.0
+CDN_RATE_LIMIT = 0.05
 REQUEST_TIMEOUT = 15
 
 
@@ -71,6 +79,9 @@ class SteamStoreProvider(MetadataProvider):
         self.session.headers.setdefault("User-Agent", "Rose-GameLab/0.1 (+https://github.com/Solidifiedinstone/Rose-GameLab)")
         # Tests pass rate_limit=0 to run against fakes without sleeping.
         self.limiter = RateLimiter(rate_limit)
+        # Artwork comes from a static CDN, not the API, so it gets its own
+        # much lighter limiter.
+        self.cdn_limiter = RateLimiter(0.0 if rate_limit == 0 else CDN_RATE_LIMIT)
 
     def available(self) -> bool:
         return True
@@ -145,7 +156,7 @@ class SteamStoreProvider(MetadataProvider):
         common for older titles and is not an error.
         """
         for url in self.artwork_urls(appid, kind):
-            self.limiter.wait()
+            self.cdn_limiter.wait()
             try:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)
             except requests.RequestException as exc:

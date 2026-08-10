@@ -43,22 +43,50 @@ def rose_lines() -> list[str]:
     return ROSE_ART.strip("\n").split("\n")
 
 
-def rose_html(petal: str = ROSE_WHITE, stem: str = ROSE_GREEN) -> str:
-    """The rose as colourised HTML, for Qt rich-text labels.
+def rose_widget(petal: str = ROSE_WHITE, stem: str = ROSE_GREEN):
+    """The rose as a widget, drawn in plain monospace text.
 
-    Rendered as HTML rather than plain text because the art must keep its
-    exact spacing while carrying two colours, and Qt labels do not support
-    per-line colour any other way.
+    Deliberately NOT rich text with a centred alignment. ASCII art depends on
+    every line keeping its exact leading whitespace, and a centred rich-text
+    label centres each LINE independently — which shifts every row by a
+    different amount and tears the drawing apart. HTML line-height is also
+    ignored by Qt's rich text engine, which stretched the art vertically.
+
+    So: two plain-text labels (bloom, then stem), left-aligned internally so
+    the spacing is untouched, and centred as a BLOCK by the layout instead.
     """
-    from html import escape
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont, QFontDatabase
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-    rows = []
-    for index, line in enumerate(rose_lines()):
-        colour = stem if index >= ROSE_STEM_START_LINE else petal
-        rows.append(f'<span style="color:{colour}">{escape(line)}</span>')
+    lines = rose_lines()
+    font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    font.setPointSizeF(9.5)
+    font.setStyleHint(QFont.StyleHint.Monospace)
 
-    return (
-        '<div style="font-family:monospace;white-space:pre;line-height:1.0">'
-        + "<br>".join(rows)
-        + "</div>"
-    )
+    block = QWidget()
+    column = QVBoxLayout(block)
+    column.setContentsMargins(0, 0, 0, 0)
+    column.setSpacing(0)
+
+    for start, end, colour in (
+        (0, ROSE_STEM_START_LINE, petal),
+        (ROSE_STEM_START_LINE, len(lines), stem),
+    ):
+        label = QLabel("\n".join(lines[start:end]))
+        label.setFont(font)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        # Left-aligned: the art's own leading spaces do the positioning.
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        label.setStyleSheet(f"color: {colour}; background: transparent;")
+        column.addWidget(label)
+
+    # Centre the whole drawing without touching the text inside it.
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addStretch(1)
+    row.addWidget(block)
+    row.addStretch(1)
+
+    return holder

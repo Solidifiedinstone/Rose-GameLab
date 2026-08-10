@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -109,6 +109,7 @@ class MainWindow(QMainWindow):
         self.theme = get_theme(theme_name)
         self._thread: Optional[QThread] = None
         self._worker: Optional[Worker] = None
+        self._on_done = None
         self._filter = "all"
         self._search = ""
         self._sort = "title"
@@ -120,6 +121,11 @@ class MainWindow(QMainWindow):
         self._build()
         self._build_shortcuts()
         self.refresh()
+
+        # Steam is found and imported on its own. Making the user press
+        # "import Steam" to see games that are plainly installed on the machine
+        # is busywork the launcher can just do.
+        QTimer.singleShot(200, self.auto_import_steam)
 
     # ── Construction ──────────────────────────────────────────────
 
@@ -170,11 +176,11 @@ class MainWindow(QMainWindow):
     def _build_top_bar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("TopBar")
-        bar.setFixedHeight(58)
+        bar.setFixedHeight(66)
 
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(SPACING, 9, SPACING, 9)
-        layout.setSpacing(8)
+        layout.setContentsMargins(SPACING, 11, SPACING, 11)
+        layout.setSpacing(10)
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search your library…")
@@ -211,7 +217,7 @@ class MainWindow(QMainWindow):
 
     def _build_status_bar(self) -> QWidget:
         bar = QFrame()
-        bar.setFixedHeight(30)
+        bar.setFixedHeight(34)
 
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(SPACING, 0, SPACING, 0)
@@ -480,6 +486,71 @@ class MainWindow(QMainWindow):
 
         self._run(work, "Finding art…", done)
 
+    # ── Steam auto-detect ─────────────────────────────────────────
+
+    def auto_import_steam(self) -> None:
+        """Find and import Steam in the background, without being asked.
+
+        Runs on every start, so newly installed games appear by themselves.
+        Import is a merge, not a replace, so nothing the user has curated is
+        disturbed and re-running costs nothing.
+        """
+        from rose_gamelab.sources.steam import SteamProvider
+
+        provider = SteamProvider()
+        if not provider.validate():
+            # No Steam on this machine. Not an error, and not worth a message.
+            return
+
+        if self._thread is not None and self._thread.isRunning():
+            return
+
+        def work(report):
+            report("Checking Steam…")
+            games = provider.discover()
+            report(f"Found {len(games)} Steam games")
+            return self.library.import_entries(games, source_id="steam")
+
+        def done(result):
+            if result.added:
+                self.refresh()
+                self.status.setText(
+                    f"Added {result.added} new Steam game"
+                    f"{'s' if result.added != 1 else ''}"
+                )
+            else:
+                self.status.setText(f"{self.library.count()} games")
+
+            # Anything still without a cover gets one, unprompted.
+            QTimer.singleShot(400, self.scrape_missing_art_quietly)
+
+        self._run(work, "Checking Steam…", done)
+
+    def scrape_missing_art_quietly(self) -> None:
+        """Fetch art for games that have none, without the user asking.
+
+        Only runs when something is actually missing, so a fully-scraped
+        library starts instantly and silently.
+        """
+        missing = [g for g in self.library.list_games(include_hidden=True) if not g.cover_path]
+        if not missing or (self._thread is not None and self._thread.isRunning()):
+            return
+
+        def work(report):
+            return self.scraper.scrape_library(
+                only_missing=True,
+                progress=lambda state, title: report(title, state.processed, state.total),
+            )
+
+        def done(state):
+            self.refresh()
+            self.status.setText(
+                f"{self.library.count()} games · found art for {state.art_found}"
+                if state.art_found else f"{self.library.count()} games"
+            )
+
+        self._run(work, f"Finding art for {len(missing)} games…", done)
+
     # ── Browse ────────────────────────────────────────────────────
 
     def load_chart(self, system_id: str) -> None:
@@ -550,11 +621,25 @@ class MainWindow(QMainWindow):
         self._thread = QThread()
         self._worker = Worker(work)
         self._worker.moveToThread(self._thread)
+        self._on_done = on_done
 
+        # These MUST be bound methods of this window, connected queued.
+        #
+        # A lambda has no thread affinity, so Qt cannot tell which thread should
+        # receive the signal and falls back to a direct connection — running the
+        # handler ON the worker thread. _finish() then tears that thread down
+        # from inside itself, which Qt reports as "thread tried to wait on
+        # itself" and which kills the process.
         self._thread.started.connect(self._worker.run)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(lambda result: self._finish(result, on_done))
+        self._worker.progress.connect(
+            self._on_progress, Qt.ConnectionType.QueuedConnection
+        )
+        self._worker.failed.connect(
+            self._on_failed, Qt.ConnectionType.QueuedConnection
+        )
+        self._worker.finished.connect(
+            self._finish, Qt.ConnectionType.QueuedConnection
+        )
 
         self._thread.start()
 
@@ -577,10 +662,13 @@ class MainWindow(QMainWindow):
 
         self.status.setText("Failed")
 
-    def _finish(self, result, on_done) -> None:
+    def _finish(self, result) -> None:
         self.progress.hide()
         self._teardown_thread()
-        on_done(result)
+
+        on_done, self._on_done = self._on_done, None
+        if on_done is not None:
+            on_done(result)
 
     def _teardown_thread(self) -> None:
         if self._thread is not None:
