@@ -170,6 +170,7 @@ class Sidebar(QFrame):
             ("★", "Favourites", "favorites"),
             ("⏱", "Recently Played", "recent"),
             ("🎲", "Surprise Me", "random"),
+            ("🌐", "Browse", "browse"),
         ):
             self.add_item(icon, label, key=key, checked=(key == "all"))
 

@@ -56,10 +56,19 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACING, SPACING, SPACING, SPACING)
 
+        from rose_gamelab.ui.widgets.tools_tabs import (
+            ControllersTab,
+            SavesTab,
+            SteamExportTab,
+        )
+
         tabs = QTabWidget()
         tabs.addTab(self._appearance_tab(), "Appearance")
         tabs.addTab(self._profiles_tab(), "Launch Profiles")
+        tabs.addTab(ControllersTab(theme), "Controllers")
+        tabs.addTab(SavesTab(library, theme), "Saves")
         tabs.addTab(self._sources_tab(), "Sources")
+        tabs.addTab(SteamExportTab(library, theme), "Steam Export")
         tabs.addTab(self._about_tab(), "About")
         layout.addWidget(tabs)
 

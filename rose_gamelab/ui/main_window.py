@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +42,7 @@ from rose_gamelab.db.database import Database
 from rose_gamelab.metadata.scraper import Scraper
 from rose_gamelab.ui.branding import APP_NAME
 from rose_gamelab.ui.theme import COVER_WIDTHS, SPACING, Theme, get_theme, stylesheet
+from rose_gamelab.ui.widgets.browse_view import BrowseView
 from rose_gamelab.ui.widgets.detail_panel import DetailPanel
 from rose_gamelab.ui.widgets.game_grid import GameGrid
 from rose_gamelab.ui.widgets.sidebar import Sidebar
@@ -140,10 +142,20 @@ class MainWindow(QMainWindow):
         middle.setSpacing(0)
         middle.addWidget(self._build_top_bar())
 
+        # The library grid and the browse view share the same space; the
+        # sidebar switches between them.
+        self.pages = QStackedWidget()
+
         self.grid = GameGrid(self.theme)
         self.grid.game_selected.connect(self._on_game_selected)
         self.grid.game_activated.connect(lambda gid: self.launch(gid, None))
-        middle.addWidget(self.grid, 1)
+        self.pages.addWidget(self.grid)
+
+        self.browse = BrowseView(self.library, self.theme)
+        self.browse.refresh_requested.connect(self.load_chart)
+        self.pages.addWidget(self.browse)
+
+        middle.addWidget(self.pages, 1)
 
         middle.addWidget(self._build_status_bar())
         layout.addLayout(middle, 1)
@@ -295,6 +307,13 @@ class MainWindow(QMainWindow):
     # ── Interaction ───────────────────────────────────────────────
 
     def _on_filter(self, key: str) -> None:
+        if key == "browse":
+            self.pages.setCurrentWidget(self.browse)
+            self.load_chart(self.browse.system_picker.currentData() or "pc")
+            return
+
+        self.pages.setCurrentWidget(self.grid)
+
         if key == "random":
             game = self.library.random_game()
             if game:
@@ -462,6 +481,35 @@ class MainWindow(QMainWindow):
 
         self._run(work, "Finding art…", done)
 
+    # ── Browse ────────────────────────────────────────────────────
+
+    def load_chart(self, system_id: str) -> None:
+        """Load the chart for a system on a worker thread."""
+        from rose_gamelab.metadata.base import ProviderError
+        from rose_gamelab.metadata.charts import SteamCharts, chart_for_system
+
+        self.browse.show_loading()
+
+        def work(report):
+            report("Loading charts…")
+            chart = chart_for_system(system_id, self.library)
+
+            # Steam's chart returns appids only; resolve real titles so the
+            # list is readable rather than a column of numbers.
+            if chart.source == "steam":
+                report("Reading game names…")
+                SteamCharts().resolve_titles(chart, self.scraper.steam)
+
+            return chart
+
+        def done(chart):
+            self.browse.show_chart(chart)
+
+        try:
+            self._run(work, "Loading charts…", done)
+        except ProviderError as exc:
+            self.browse.show_error(str(exc))
+
     # ── Windows ───────────────────────────────────────────────────
 
     def open_settings(self) -> None:
@@ -520,7 +568,14 @@ class MainWindow(QMainWindow):
     def _on_failed(self, message: str) -> None:
         self.progress.hide()
         self._teardown_thread()
-        QMessageBox.warning(self, "Something went wrong", message)
+
+        # A failed chart load belongs in the browse view, not a modal that
+        # interrupts whatever the user was doing.
+        if self.pages.currentWidget() is self.browse:
+            self.browse.show_error(message)
+        else:
+            QMessageBox.warning(self, "Something went wrong", message)
+
         self.status.setText("Failed")
 
     def _finish(self, result, on_done) -> None:

@@ -25,10 +25,9 @@ you point it at — then shows them all together as one clean, themable collecti
 Part of **R.O.S.E.** (Rose Open Source Endeavours), a nonprofit building free,
 open-source alternatives to big-tech applications.
 
-> **Status: early development.** The project is being rebuilt from the ground up.
-> Features are listed below as *planned* until they actually work — nothing here
-> is a placeholder pretending to be finished. See [ROADMAP.md](ROADMAP.md) for
-> what is real today.
+> **Status: alpha.** The backend is complete and tested; the interface works but
+> has had limited real-world use. Features below are marked with what actually
+> works today — nothing here is a placeholder pretending to be finished.
 
 ## Principles
 
@@ -39,34 +38,43 @@ open-source alternatives to big-tech applications.
 - **Your data stays yours.** The library is a plain SQLite file you can read,
   back up, export, or delete.
 
-## Planned features
+## Features
 
 **One library**
-- Import from emulators, ROM folders, Steam, GOG, Heroic, or any custom source
-- Sources appear in the sidebar as you add them
-- Duplicate detection — the same game from three sources becomes one entry with
-  three ways to launch it
-- Multi-disc games merge into a single entry with an auto-generated `.m3u`
+- Import from emulators, ROM folders, Steam, GOG, Heroic, Lutris, or a custom source
+- Sources and systems appear in the sidebar as you add them
+- Duplicate detection — the same game owned on Steam *and* dumped as a ROM
+  becomes one entry with two ways to play, not two entries
+- Multi-disc games merge into a single entry with an auto-generated `.m3u`,
+  so the emulator can swap discs without returning to the launcher
 
 **Knowing what your games are**
-- ROM hash matching against No-Intro / Redump datasets, so games are identified
-  by content rather than guessed from filenames
-- Cover art scraping, with a clean titled placeholder when no art exists
-- Genre, release date, and reviews pulled from IGDB and Steam
-- Collections, tags, filters, and "surprise me"
+- Games identified by content hash rather than filename, so renaming a ROM
+  never orphans its artwork, playtime or achievements
+- Cover art from Steam's CDN and libretro's thumbnail archive; a clean titled
+  placeholder when no art exists
+- Genre, release date, developer and review scores from Steam and OpenVGDB
+- Collections, tags, filters, full-text search, and "surprise me"
 
 **Playing them**
-- Per-game launch profiles (Proton version, Gamescope, MangoHud, gamemode,
-  environment variables, custom arguments) with a configurable default profile
-- One controller configuration applied across *all* emulators at once
-- Big Picture mode — a fullscreen, fully gamepad-navigable interface
-- Playtime tracking and RetroAchievements support
+- Per-game launch profiles — Proton version, Gamescope, MangoHud, gamemode,
+  environment variables, custom arguments — with a configurable default
+- One controller configuration exported to every emulator at once
+- Big Picture mode: fullscreen, high-contrast, fully gamepad-navigable
+- Playtime tracking. Launches that hand off to another client (Steam, Heroic,
+  Lutris) are marked untracked rather than recording a wrong number
+- RetroAchievements support (needs your own RetroAchievements API key)
 
 **Managing them**
-- Save file and save state management, cleanly organized and easy to browse
+- Save file and save state management: found where your emulators keep them,
+  never moved, backed up as plain folders you can read without GameLab
+- Export to Steam as non-Steam shortcuts, with cover art and library categories
 - Library import/export so you can move machines or share a curated set
-- Export to Steam as non-Steam shortcuts, with art and library categories
-- Burn/rip support for DRM-free discs
+
+**Not yet finished**
+- Disc burning and ripping
+- Some emulator-specific controller formats are deliberately unimplemented
+  rather than guessed — see `core/controller.py` for which and why
 
 ## Requirements
 
@@ -75,8 +83,38 @@ open-source alternatives to big-tech applications.
 
 ## Installation
 
-Not yet packaged. Once the rebuild lands, GameLab will ship as a Flatpak and an
-AUR package.
+Not yet packaged. Until it ships as a Flatpak and an AUR package:
+
+```sh
+git clone https://github.com/Solidifiedinstone/Rose-GameLab
+cd Rose-GameLab
+python -m venv --system-site-packages .venv
+.venv/bin/pip install -e .
+.venv/bin/rose-gamelab
+```
+
+## Command line
+
+GameLab works headlessly too:
+
+```sh
+rose-gamelab                      # open the window
+rose-gamelab gui --big-picture    # start in Big Picture mode
+rose-gamelab import-steam         # import installed Steam games
+rose-gamelab scan ~/ROMs/snes --system snes
+rose-gamelab find-art             # download covers and metadata
+rose-gamelab list --system ps1
+rose-gamelab export-steam         # add games to Steam (close Steam first)
+```
+
+## Development
+
+```sh
+.venv/bin/python -m pytest tests/ -q
+```
+
+566 tests, none of which touch the network or require a controller, an optical
+drive, or any launcher to be installed.
 
 ## Contributing
 
