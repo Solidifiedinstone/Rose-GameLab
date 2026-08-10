@@ -126,7 +126,7 @@ class GameCard(QWidget):
 
     # ── Painting ──────────────────────────────────────────────────
 
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -213,25 +213,25 @@ class GameCard(QWidget):
 
     # ── Interaction ───────────────────────────────────────────────
 
-    def enterEvent(self, event) -> None:  # noqa: N802
+    def enterEvent(self, event) -> None:
         self._hovered = True
         self.update()
         super().enterEvent(event)
 
-    def leaveEvent(self, event) -> None:  # noqa: N802
+    def leaveEvent(self, event) -> None:
         self._hovered = False
         self.update()
         super().leaveEvent(event)
 
-    def focusInEvent(self, event) -> None:  # noqa: N802
+    def focusInEvent(self, event) -> None:
         self.update()
         super().focusInEvent(event)
 
-    def focusOutEvent(self, event) -> None:  # noqa: N802
+    def focusOutEvent(self, event) -> None:
         self.update()
         super().focusOutEvent(event)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
             self.selected.emit(self.game.id)
@@ -239,12 +239,12 @@ class GameCard(QWidget):
             self.context_requested.emit(self.game.id, event.globalPosition().toPoint())
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.activated.emit(self.game.id)
         super().mouseDoubleClickEvent(event)
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802
+    def keyPressEvent(self, event) -> None:
         # Enter launches, so the grid is fully usable from the keyboard and
         # from a gamepad in Big Picture mode.
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):

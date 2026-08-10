@@ -7,7 +7,6 @@ so the suite is fast, deterministic and works offline.
 from __future__ import annotations
 
 import json
-
 from pathlib import Path
 
 import pytest
@@ -228,6 +227,7 @@ def test_unsuccessful_steam_response_returns_none():
 def test_network_failure_raises_rather_than_reporting_no_such_game():
     """The caller must distinguish 'not found' from 'could not reach Steam'."""
     import requests
+
     from rose_gamelab.metadata.base import ProviderError
 
     class BrokenSession(FakeSession):

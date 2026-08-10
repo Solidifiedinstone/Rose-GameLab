@@ -15,7 +15,6 @@ import hashlib
 import logging
 import os
 import shutil
-
 from pathlib import Path
 from typing import Optional
 
@@ -53,10 +52,9 @@ def detect_image_type(data: bytes) -> Optional[str]:
     """
     for signature, extension in _SIGNATURES.items():
         if data.startswith(signature):
-            if signature == b"RIFF":
-                # RIFF is also WAV/AVI; WebP has "WEBP" at offset 8.
-                if len(data) < 12 or data[8:12] != b"WEBP":
-                    continue
+            # RIFF is also WAV/AVI; WebP is distinguished by "WEBP" at offset 8.
+            if signature == b"RIFF" and (len(data) < 12 or data[8:12] != b"WEBP"):
+                continue
             return extension
     return None
 

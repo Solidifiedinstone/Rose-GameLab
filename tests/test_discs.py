@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from rose_gamelab.core.discs import (
-    GameGroup,
     DiscFile,
+    GameGroup,
     filter_redundant_tracks,
     group_discs,
     normalise_title,
@@ -16,7 +16,6 @@ from rose_gamelab.core.discs import (
     sort_title,
     write_m3u,
 )
-
 
 # ── Disc marker parsing ───────────────────────────────────────────
 

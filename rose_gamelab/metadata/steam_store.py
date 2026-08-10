@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-
 from typing import Optional
 
 import requests

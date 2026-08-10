@@ -12,10 +12,9 @@ not backed by actual work, which is what the previous implementation did.
 from __future__ import annotations
 
 import logging
-
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
@@ -26,15 +25,15 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QProgressBar,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from rose_gamelab.core.emulator import SYSTEMS, get_system
-from rose_gamelab.core.launcher import LaunchError, Launcher
+from rose_gamelab.core.emulator import get_system
+from rose_gamelab.core.launcher import Launcher, LaunchError
 from rose_gamelab.core.library import Library
 from rose_gamelab.core.profiles import ProfileStore
 from rose_gamelab.core.scanner import RomScanner
@@ -590,7 +589,7 @@ class MainWindow(QMainWindow):
             self._thread = None
             self._worker = None
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def closeEvent(self, event) -> None:
         # Games keep running; GameLab exiting should not kill what is being
         # played. Only our own worker threads are stopped.
         self.scraper.cancel()

@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import re
-
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
@@ -95,7 +94,7 @@ def parse_gameinfo(path: Path) -> dict[str, str]:
 
     return {
         field: line.strip()
-        for field, line in zip(GAMEINFO_FIELDS, lines)
+        for field, line in zip(GAMEINFO_FIELDS, lines, strict=False)
         if line.strip()
     }
 

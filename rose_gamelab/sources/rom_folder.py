@@ -38,7 +38,7 @@ class ROMSourceProvider(SourceProvider):
 
         for f in path.rglob("*") if recursive else path.iterdir():
             if f.is_file() and (not extensions or f.suffix.lower() in extensions):
-                game_id = hashlib.sha256(f"{self.source_def.id}:{str(f)}".encode()).hexdigest()[:16]
+                game_id = hashlib.sha256(f"{self.source_def.id}:{f!s}".encode()).hexdigest()[:16]
                 entries.append(GameEntry(
                     id=game_id,
                     name=f.stem,

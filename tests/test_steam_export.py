@@ -8,7 +8,6 @@ a file Steam ignores.
 from __future__ import annotations
 
 import binascii
-
 from pathlib import Path
 
 import pytest

@@ -44,7 +44,6 @@ from __future__ import annotations
 import logging
 import shutil
 import sqlite3
-
 from pathlib import Path
 from typing import Optional
 
@@ -172,7 +171,7 @@ class LutrisProvider(SourceProvider):
         if "hidden" in available:
             where.append("(hidden IS NULL OR hidden = 0)")
 
-        query = f"SELECT {', '.join(selected)} FROM games"  # noqa: S608 - names are from a fixed list
+        query = f"SELECT {', '.join(selected)} FROM games"
         if where:
             query += " WHERE " + " AND ".join(where)
         query += " ORDER BY id"

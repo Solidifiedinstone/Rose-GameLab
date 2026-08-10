@@ -19,14 +19,13 @@ from rose_gamelab.metadata.retroachievements import (
     Achievement,
     RetroAchievementsProvider,
     UnverifiedHashAlgorithm,
+    _parse_released,
     credentials_from_config,
     link_game,
     ra_hash,
     save_achievements,
     supports_hashing,
-    _parse_released,
 )
-
 
 # ── Fakes ─────────────────────────────────────────────────────────
 

@@ -6,7 +6,6 @@ Subclasses implement discover() -> list[GameEntry] and import_games() -> list.
 from __future__ import annotations
 
 import hashlib
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,7 +60,7 @@ class SourceProvider(ABC):
 
         for f in path.rglob("*") if recursive else path.iterdir():
             if f.is_file() and (not extensions or f.suffix.lower() in extensions):
-                game_id = f"{self.get_def().id}:{str(f)}"
+                game_id = f"{self.get_def().id}:{f!s}"
                 entries.append(GameEntry(
                     id=hashlib.sha256(game_id.encode()).hexdigest()[:16],
                     name=f.stem,

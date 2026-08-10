@@ -16,12 +16,11 @@ Nothing here touches the network.
 from __future__ import annotations
 
 import logging
-
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterator, Optional
 
-from rose_gamelab.core.discs import GameGroup, group_discs, write_m3u
+from rose_gamelab.core.discs import group_discs, write_m3u
 from rose_gamelab.core.emulator import SYSTEMS, get_system, systems_for_extension
 from rose_gamelab.core.hashing import hash_file, should_hash
 from rose_gamelab.core.library import ImportResult, Library

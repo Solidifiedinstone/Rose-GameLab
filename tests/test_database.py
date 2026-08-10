@@ -94,7 +94,7 @@ def _with_broken_migration(path, sql: str):
     # that name rather than the migrations module's.
     from rose_gamelab.db import database as database_module
 
-    broken = MIGRATIONS + [(SCHEMA_VERSION + 1, "broken", sql)]
+    broken = [*MIGRATIONS, (SCHEMA_VERSION + 1, "broken", sql)]
     original = database_module.MIGRATIONS
     try:
         database_module.MIGRATIONS = broken
@@ -240,13 +240,12 @@ def test_transaction_commits_on_success(db):
 
 
 def test_transaction_rolls_back_on_error(db):
-    with pytest.raises(ValueError):
-        with db.transaction() as cur:
-            cur.execute(
-                "INSERT INTO games (title, sort_title, system, added_at) VALUES (?, ?, ?, ?)",
-                ("Ghost", "ghost", "snes", utc_now()),
-            )
-            raise ValueError("boom")
+    with pytest.raises(ValueError), db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO games (title, sort_title, system, added_at) VALUES (?, ?, ?, ?)",
+            ("Ghost", "ghost", "snes", utc_now()),
+        )
+        raise ValueError("boom")
 
     assert db.query_one("SELECT 1 FROM games WHERE title = 'Ghost'") is None
 

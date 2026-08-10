@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from rose_gamelab.config import Config
-from rose_gamelab.core.emulator import GameEntry, SYSTEMS
+from rose_gamelab.core.emulator import SYSTEMS, GameEntry
 
 
 class ROMScanner:

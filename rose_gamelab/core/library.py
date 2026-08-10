@@ -23,11 +23,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Optional
 
 from rose_gamelab.core.discs import GameGroup, sort_title
 from rose_gamelab.core.emulator import GameEntry

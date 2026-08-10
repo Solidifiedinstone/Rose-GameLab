@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from rose_gamelab.core import disc
-from rose_gamelab.core.disc import (
+from rose_gamelab.core import optical as disc
+from rose_gamelab.core.optical import (
     DiscBurner,
     DiscError,
     DiscProgress,
@@ -37,7 +37,6 @@ from rose_gamelab.core.disc import (
     toc_to_cue,
     tool_status,
 )
-
 
 # ── /proc/sys/dev/cdrom/info ──────────────────────────────────────
 # Verbatim shape of the kernel's file (include/linux/cdrom.h, cdrom_print_info).
@@ -348,7 +347,7 @@ def test_ddrescue_banner_lines_produce_no_progress():
 
 
 def test_whole_ddrescue_block_yields_only_real_measurements():
-    updates = [u for u in (parse_ddrescue_progress(l) for l in DDRESCUE_STATUS) if u]
+    updates = [u for u in (parse_ddrescue_progress(line) for line in DDRESCUE_STATUS) if u]
 
     assert updates
     assert all(u.percent is None or 0 <= u.percent <= 100 for u in updates)
@@ -388,7 +387,7 @@ def test_cdrskin_progress_climbs_monotonically():
         "Track 01:  120 of  650 MB written (fifo 100%) [buf  98%]   8.0x.",
         "Track 01:  650 of  650 MB written (fifo 100%) [buf  97%]   8.0x.",
     ]
-    percents = [parse_cdrskin_progress(l).percent for l in lines]
+    percents = [parse_cdrskin_progress(line).percent for line in lines]
 
     assert percents == sorted(percents)
     assert percents[-1] == pytest.approx(100.0)
@@ -710,6 +709,124 @@ def test_cancel_is_visible_from_another_thread():
     assert burner.cancelled
 
 
+# ── The subprocess runner, against real processes ─────────────────
+# These use /bin/sh and dd on /dev/zero. No optical drive is involved and
+# nothing is burned; they exist because parser unit tests alone would not catch
+# a runner that never delivers a line or never stops on cancel.
+
+def runner(cancel=None):
+    import threading
+    return disc._Runner(cancel or threading.Event())
+
+
+def test_runner_returns_the_exit_code():
+    code, _tail = runner().run(["/bin/sh", "-c", "exit 3"], parser=lambda line: None)
+    assert code == 3
+
+
+def test_runner_captures_output_from_both_streams():
+    code, tail = runner().run(
+        ["/bin/sh", "-c", "echo to-stdout; echo to-stderr 1>&2"],
+        parser=lambda line: None,
+    )
+
+    assert code == 0
+    assert "to-stdout" in tail
+    assert "to-stderr" in tail
+
+
+def test_runner_delivers_progress_from_carriage_returned_output():
+    """The real failure mode: a tool that only ever emits \\r would otherwise
+    deliver no progress until it exited."""
+    seen: list[DiscProgress] = []
+    script = "printf 'Track 01:    5 of  650 MB written (fifo 100%%) [buf  99%%]   8.0x.\\r'"
+
+    runner().run(
+        ["/bin/sh", "-c", script + "; printf 'x\\n'"],
+        parser=parse_cdrskin_progress,
+        progress=seen.append,
+    )
+
+    assert seen
+    assert seen[0].percent == pytest.approx(5 / 650 * 100)
+
+
+def test_runner_keeps_only_the_tail_of_a_chatty_tool():
+    code, tail = runner().run(
+        ["/bin/sh", "-c", "i=0; while [ $i -lt 500 ]; do echo line$i; i=$((i+1)); done"],
+        parser=lambda line: None,
+    )
+
+    assert code == 0
+    assert len(tail) <= disc._Runner.TAIL_LINES
+    assert tail[-1] == "line499"
+
+
+def test_runner_reports_extra_progress_from_the_output_file(tmp_path):
+    """dd says nothing while it runs; all of its progress is the file's size."""
+    target = tmp_path / "out.bin"
+    seen: list[DiscProgress] = []
+
+    runner().run(
+        ["dd", "if=/dev/zero", f"of={target}", "bs=65536", "count=64", "status=none"],
+        parser=lambda line: None,
+        progress=seen.append,
+        extra=disc._FileSizeProgress(target, 64 * 65536, "ripping"),
+    )
+
+    assert target.stat().st_size == 64 * 65536
+    assert seen
+    assert all(u.bytes_done is not None for u in seen)
+
+
+def test_cancelling_stops_a_running_tool():
+    import threading
+
+    cancel = threading.Event()
+    threading.Timer(0.2, cancel.set).start()
+
+    with pytest.raises(disc.DiscCancelled):
+        runner(cancel).run(["/bin/sh", "-c", "sleep 30"], parser=lambda line: None)
+
+
+def test_cancelling_kills_the_whole_process_group():
+    """Tools fork helpers; terminating only the parent leaves the drive busy."""
+    import subprocess
+    import threading
+
+    cancel = threading.Event()
+    threading.Timer(0.2, cancel.set).start()
+
+    marker = "rose-gamelab-disc-test-child"
+    with pytest.raises(disc.DiscCancelled):
+        runner(cancel).run(
+            ["/bin/sh", "-c", f"sh -c 'exec -a {marker} sleep 30' & wait"],
+            parser=lambda line: None,
+        )
+
+    survivors = subprocess.run(
+        ["pgrep", "-f", marker], capture_output=True, text=True
+    )
+    assert survivors.returncode != 0, f"child survived cancellation: {survivors.stdout}"
+
+
+def test_cancelling_before_the_tool_starts_still_stops():
+    import threading
+
+    cancel = threading.Event()
+    cancel.set()
+
+    with pytest.raises(disc.DiscCancelled):
+        runner(cancel).run(["/bin/sh", "-c", "sleep 30"], parser=lambda line: None)
+
+
+def test_running_a_missing_binary_says_it_is_missing():
+    with pytest.raises(DiscError) as caught:
+        runner().run(["rose-gamelab-no-such-binary"], parser=lambda line: None)
+
+    assert "not found" in str(caught.value)
+
+
 # ── Refusals and honest failures ──────────────────────────────────
 
 def test_burning_a_missing_image_says_so(tmp_path):
@@ -800,14 +917,14 @@ def test_tool_failure_admits_when_there_was_no_output():
 # ── Result objects ────────────────────────────────────────────────
 
 def test_rip_result_prefers_the_cue_for_the_library():
-    from rose_gamelab.core.disc import RipResult
+    from rose_gamelab.core.optical import RipResult
 
     result = RipResult(image_path=disc.Path("/x/game.bin"), cue_path=disc.Path("/x/game.cue"))
     assert result.library_path == disc.Path("/x/game.cue")
 
 
 def test_rip_result_falls_back_to_the_image_when_there_is_no_cue():
-    from rose_gamelab.core.disc import RipResult
+    from rose_gamelab.core.optical import RipResult
 
     result = RipResult(image_path=disc.Path("/x/game.iso"))
     assert result.library_path == disc.Path("/x/game.iso")
@@ -815,7 +932,7 @@ def test_rip_result_falls_back_to_the_image_when_there_is_no_cue():
 
 def test_unverified_burn_is_not_reported_as_failed():
     """verified=None means 'not checked', which is different from 'wrong'."""
-    from rose_gamelab.core.disc import BurnResult
+    from rose_gamelab.core.optical import BurnResult
 
     result = BurnResult(image_path=disc.Path("/x/g.iso"), device=disc.Path("/dev/sr0"))
     assert result.verified is None
@@ -823,7 +940,7 @@ def test_unverified_burn_is_not_reported_as_failed():
 
 
 def test_failed_verification_is_reported_as_failed():
-    from rose_gamelab.core.disc import BurnResult
+    from rose_gamelab.core.optical import BurnResult
 
     result = BurnResult(
         image_path=disc.Path("/x/g.iso"), device=disc.Path("/dev/sr0"), verified=False

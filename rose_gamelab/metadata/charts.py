@@ -20,7 +20,6 @@ IGDB key later, that becomes a real cross-platform source and can slot in here.
 from __future__ import annotations
 
 import logging
-
 from dataclasses import dataclass, field
 from typing import Optional
 

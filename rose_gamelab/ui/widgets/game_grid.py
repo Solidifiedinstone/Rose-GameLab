@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QLayout,
     QLayoutItem,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -38,35 +37,35 @@ class FlowLayout(QLayout):
         self.setContentsMargins(spacing, spacing, spacing, spacing)
 
     # Qt requires these five overrides for a custom layout.
-    def addItem(self, item: QLayoutItem) -> None:  # noqa: N802
+    def addItem(self, item: QLayoutItem) -> None:
         self._items.append(item)
 
     def count(self) -> int:
         return len(self._items)
 
-    def itemAt(self, index: int) -> Optional[QLayoutItem]:  # noqa: N802
+    def itemAt(self, index: int) -> Optional[QLayoutItem]:
         return self._items[index] if 0 <= index < len(self._items) else None
 
-    def takeAt(self, index: int) -> Optional[QLayoutItem]:  # noqa: N802
+    def takeAt(self, index: int) -> Optional[QLayoutItem]:
         return self._items.pop(index) if 0 <= index < len(self._items) else None
 
-    def expandingDirections(self) -> Qt.Orientations:  # noqa: N802
+    def expandingDirections(self) -> Qt.Orientations:
         return Qt.Orientation(0)
 
-    def hasHeightForWidth(self) -> bool:  # noqa: N802
+    def hasHeightForWidth(self) -> bool:
         return True
 
-    def heightForWidth(self, width: int) -> int:  # noqa: N802
+    def heightForWidth(self, width: int) -> int:
         return self._layout(QRect(0, 0, width, 0), apply=False)
 
-    def setGeometry(self, rect: QRect) -> None:  # noqa: N802
+    def setGeometry(self, rect: QRect) -> None:
         super().setGeometry(rect)
         self._layout(rect, apply=True)
 
-    def sizeHint(self) -> QSize:  # noqa: N802
+    def sizeHint(self) -> QSize:
         return self.minimumSize()
 
-    def minimumSize(self) -> QSize:  # noqa: N802
+    def minimumSize(self) -> QSize:
         size = QSize()
         for item in self._items:
             size = size.expandedTo(item.minimumSize())

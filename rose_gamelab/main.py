@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sys
-
 from pathlib import Path
 from typing import Optional
 
@@ -179,7 +178,7 @@ def play(ctx: click.Context, game_id: int) -> None:
     """
     from rich.console import Console
 
-    from rose_gamelab.core.launcher import LaunchError, Launcher
+    from rose_gamelab.core.launcher import Launcher, LaunchError
     from rose_gamelab.core.library import Library
     from rose_gamelab.core.profiles import ProfileStore
 

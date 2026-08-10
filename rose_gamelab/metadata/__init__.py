@@ -9,7 +9,7 @@ Results are cached on disk, so a library that has been scraped once keeps its
 art and metadata with no network at all.
 """
 
-from rose_gamelab.metadata.cache import ArtCache
 from rose_gamelab.metadata.base import ArtworkResult, GameMetadata, MetadataProvider
+from rose_gamelab.metadata.cache import ArtCache
 
 __all__ = ["ArtCache", "ArtworkResult", "GameMetadata", "MetadataProvider"]

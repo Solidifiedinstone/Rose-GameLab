@@ -13,10 +13,8 @@ black pixels are genuinely off and the difference is visible.
 from __future__ import annotations
 
 import json
-
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
 
 # Corner radius, spacing and sizing live here rather than being sprinkled
 # through the stylesheet, so the whole interface can be tightened or loosened

@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 import sqlite3
 import zipfile
-
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path

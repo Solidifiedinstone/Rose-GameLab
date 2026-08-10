@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import logging
 import re
-
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from rose_gamelab.config import Config
 from rose_gamelab.core.emulator import GameEntry
@@ -218,9 +217,9 @@ class SteamProvider(SourceProvider):
 
         lowered = name.lower()
         return (
-            lowered.startswith("proton ")
-            or lowered.startswith("steam linux runtime")
-            or lowered.startswith("steamworks common")
+            lowered.startswith(
+                ("proton ", "steam linux runtime", "steamworks common")
+            )
         )
 
     # ── SourceProvider interface ──────────────────────────────────

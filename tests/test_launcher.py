@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import sys
-
 from pathlib import Path
 
 import pytest
 
-from rose_gamelab.core.launcher import LaunchError, Launcher, build_command
+from rose_gamelab.core.launcher import Launcher, LaunchError, build_command
 from rose_gamelab.core.library import Library
 from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
 from rose_gamelab.db.database import Database
@@ -245,7 +244,7 @@ def test_deleting_a_profile_leaves_games_launchable(profiles, library):
 # ── Profile resolution ────────────────────────────────────────────
 
 def test_game_profile_wins_over_default(profiles, library):
-    default_id = profiles.create(LaunchProfile(name="Default", is_default=True))
+    profiles.create(LaunchProfile(name="Default", is_default=True))
     specific_id = profiles.create(LaunchProfile(name="Specific"))
 
     game_id = library.add_game(title="X", system="pc")

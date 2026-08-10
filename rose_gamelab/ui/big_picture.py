@@ -17,25 +17,21 @@ right move within a row, up and down change rows.
 from __future__ import annotations
 
 import logging
-
 from typing import Optional
 
 from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
     Qt,
-    QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QKeyEvent, QPixmap
+from PySide6.QtGui import QFont, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -83,7 +79,6 @@ class BigPictureTile(QLabel):
 
     def _render(self) -> None:
         width = int(self.base_width * (TILE_FOCUSED_SCALE if self._focused else 1.0))
-        height = int(width * COVER_RATIO)
 
         pixmap = load_cover(self.game.cover_path or "", width)
 
@@ -349,7 +344,7 @@ class BigPictureWindow(QWidget):
             parts.append(f"{game.playtime_hours} h played")
         self.now_showing.setText("   ·   ".join(parts))
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+    def keyPressEvent(self, event: QKeyEvent) -> None:
         key = event.key()
         shelf = self.current_shelf
 
@@ -394,6 +389,6 @@ class BigPictureWindow(QWidget):
 
         self.now_showing.setText(f"Launching {game.title}…")
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def closeEvent(self, event) -> None:
         self.closed.emit()
         super().closeEvent(event)

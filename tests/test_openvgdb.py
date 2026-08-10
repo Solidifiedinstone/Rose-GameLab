@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sqlite3
 import zipfile
-
 from io import BytesIO
 from pathlib import Path
 
@@ -246,7 +245,7 @@ class FakeResponse:
         return self._payload
 
 
-def requests_HTTPError(message):  # noqa: N802 - mirrors requests' name
+def requests_HTTPError(message):
     import requests
     return requests.HTTPError(message)
 

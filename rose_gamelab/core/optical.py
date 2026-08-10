@@ -47,7 +47,6 @@ import selectors
 import shutil
 import subprocess
 import threading
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -912,6 +911,14 @@ class _Runner:
 
         if buffer:
             tail.append(buffer.decode("utf-8", "replace"))
+
+        # One final measurement after the tool has exited. Without this a run
+        # that finishes between two polls reports nothing at all, and even a
+        # long run never reports its true final size.
+        if progress and extra:
+            update = extra()
+            if update:
+                progress(update)
 
         if cancelled or self._cancel.is_set():
             raise DiscCancelled(

@@ -34,3 +34,22 @@ include = ["rose_gamelab*"]
 [tool.ruff]
 target-version = "py312"
 line-length = 120
+
+[tool.ruff.lint]
+# Deliberately not the full default set. These catch real mistakes —
+# undefined names, unused imports, shadowed builtins, import order — without
+# enforcing stylistic rewrites that would churn the codebase for no benefit.
+select = ["E", "F", "I", "B", "SIM", "PIE", "RUF"]
+ignore = [
+    "E501",     # line length is handled by the formatter, not the linter
+    "B008",     # function calls in defaults are used deliberately for Qt
+    "SIM105",   # contextlib.suppress is not clearer than try/except here
+    "RUF012",   # mutable class attrs are fine for Qt widget definitions
+    "SIM108",   # a ternary is not clearer than if/else for these branches
+    "RUF001",   # fullwidth glyphs are used deliberately as UI icons
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests deliberately import things only to assert they exist, and use
+# fixtures that look unused to a linter.
+"tests/*" = ["F401", "F811", "B011"]

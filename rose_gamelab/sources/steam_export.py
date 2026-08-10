@@ -23,7 +23,6 @@ import binascii
 import logging
 import shutil
 import struct
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -375,9 +374,12 @@ class SteamExporter:
                 by_appid[entry["appid"]] = len(existing) - 1
                 result.added += 1
 
-            if copy_artwork and game.cover_path:
-                if self._copy_artwork(shortcut, Path(game.cover_path), config_dir):
-                    result.artwork_copied += 1
+            if (
+                copy_artwork
+                and game.cover_path
+                and self._copy_artwork(shortcut, Path(game.cover_path), config_dir)
+            ):
+                result.artwork_copied += 1
 
         shortcuts_path.parent.mkdir(parents=True, exist_ok=True)
         shortcuts_path.write_bytes(serialise_shortcuts(existing))

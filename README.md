@@ -71,10 +71,22 @@ open-source alternatives to big-tech applications.
 - Export to Steam as non-Steam shortcuts, with cover art and library categories
 - Library import/export so you can move machines or share a curated set
 
-**Not yet finished**
-- Disc burning and ripping
-- Some emulator-specific controller formats are deliberately unimplemented
-  rather than guessed — see `core/controller.py` for which and why
+- Rip a CD or DVD to a `.bin`/`.cue` or `.iso` and add it to the library, and
+  burn your own DRM-free images back to disc with a read-back verification pass
+
+**Deliberately unfinished**
+
+Some things are left unimplemented rather than guessed, because a confidently
+wrong config or format costs you more than none at all:
+
+- Controller exporters exist for RetroArch, SDL, DuckStation and PCSX2. Other
+  emulators read gamepads through SDL, so the SDL mapping already covers their
+  button layout — see `core/controller.py` for what was verified and how.
+- RetroAchievements hashing is implemented for the cartridge systems whose
+  algorithm could be verified; the rest raise a named error.
+- The rip and burn command lines have never been run against real hardware
+  (no optical drive was available), though the parsing, drive detection,
+  cancellation and cue conversion are all tested.
 
 ## Requirements
 

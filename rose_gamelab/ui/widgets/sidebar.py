@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from rose_gamelab.ui.branding import rose_html
-from rose_gamelab.ui.theme import SPACING, Theme
+from rose_gamelab.ui.theme import Theme
 
 COLLAPSED_WIDTH = 62
 EXPANDED_WIDTH = 232
