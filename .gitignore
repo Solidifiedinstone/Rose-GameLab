@@ -31,3 +31,6 @@ config.yaml
 # Secrets — API keys for IGDB / SteamGridDB / RetroAchievements
 .env
 secrets.yaml
+
+# Local dev environment
+.venv/
