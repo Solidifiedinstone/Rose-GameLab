@@ -50,6 +50,12 @@ def gui(ctx: click.Context, big_picture: bool = False) -> None:
     app.setOrganizationName("Rose Open Source Endeavours")
     app.setApplicationVersion(__version__)
 
+    # Ties the window to rose-gamelab.desktop. Without it, Qt derives the
+    # Wayland app_id from the process name, so the window reports itself as
+    # "python3" — docks then show a generic Python icon, group it with unrelated
+    # Python programs, and pinning it pins the interpreter rather than GameLab.
+    app.setDesktopFileName("rose-gamelab")
+
     database = Database(ctx.obj["database"])
     window = MainWindow(database)
 
