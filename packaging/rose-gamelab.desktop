@@ -1,0 +1,26 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Rose GameLab
+GenericName=Game Launcher
+Comment=Every game you own, from every source, in one library
+Exec=rose-gamelab
+Icon=rose-gamelab
+Terminal=false
+Categories=Game;
+Keywords=game;games;launcher;library;emulator;rom;steam;retro;
+StartupNotify=true
+StartupWMClass=rose-gamelab
+
+# Right-click actions from the dock or application menu.
+Actions=BigPicture;Scan;
+
+[Desktop Action BigPicture]
+Name=Big Picture Mode
+Exec=rose-gamelab gui --big-picture
+Icon=rose-gamelab
+
+[Desktop Action Scan]
+Name=Import Steam Games
+Exec=rose-gamelab import-steam
+Icon=rose-gamelab

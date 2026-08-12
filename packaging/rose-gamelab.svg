@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    Rose GameLab application icon.
+
+    A rose whose bloom doubles as a game-controller d-pad-and-buttons cluster:
+    the project is a game launcher, and the rose is the R.O.S.E. mark shared
+    across every project in the family.
+
+    Drawn as flat shapes with no gradients on small detail, so it stays legible
+    at 16px in a dock as well as 256px in a launcher grid.
+  -->
+  <defs>
+    <linearGradient id="petal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f08fa6"/>
+      <stop offset="100%" stop-color="#c9445f"/>
+    </linearGradient>
+    <linearGradient id="backdrop" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c1c24"/>
+      <stop offset="100%" stop-color="#08080b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square backdrop, matching the app's own corner radius. -->
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#backdrop)"/>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="none"
+        stroke="#2a2a34" stroke-width="2"/>
+
+  <!-- Stem -->
+  <path d="M128 150 C128 176, 128 190, 128 208"
+        stroke="#3FA860" stroke-width="9" stroke-linecap="round" fill="none"/>
+
+  <!-- Leaves -->
+  <path d="M128 176 C104 172, 88 158, 84 140 C108 138, 124 152, 128 176 Z"
+        fill="#3FA860"/>
+  <path d="M128 192 C152 190, 168 178, 172 160 C148 158, 132 170, 128 192 Z"
+        fill="#348a4f"/>
+
+  <!-- Outer petals -->
+  <circle cx="128" cy="104" r="54" fill="url(#petal)"/>
+  <path d="M128 50 C158 50, 182 74, 182 104 C182 134, 158 158, 128 158 Z"
+        fill="#b83a55" opacity="0.55"/>
+
+  <!-- Inner bloom, arranged as a controller face: d-pad left, buttons right. -->
+  <circle cx="128" cy="104" r="34" fill="#7d2338" opacity="0.9"/>
+
+  <!-- D-pad -->
+  <rect x="98" y="99" width="26" height="10" rx="3" fill="#f6e9ec"/>
+  <rect x="106" y="91" width="10" height="26" rx="3" fill="#f6e9ec"/>
+
+  <!-- Face buttons -->
+  <circle cx="146" cy="94" r="5.5" fill="#f6e9ec"/>
+  <circle cx="157" cy="105" r="5.5" fill="#f6e9ec"/>
+  <circle cx="146" cy="116" r="5.5" fill="#f6e9ec"/>
+  <circle cx="135" cy="105" r="5.5" fill="#f6e9ec"/>
+</svg>

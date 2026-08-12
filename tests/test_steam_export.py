@@ -277,8 +277,11 @@ def test_removal_only_takes_our_own_shortcuts(library, steam_root, monkeypatch):
     assert [e["AppName"] for e in remaining] == ["Theirs"]
 
 
-def test_missing_steam_is_reported_not_crashed(library, tmp_path):
+def test_missing_steam_is_reported_not_crashed(library, tmp_path, monkeypatch):
     exporter = SteamExporter(steam_root=tmp_path / "nowhere")
+    # Must be stubbed: otherwise this test passes or fails depending on
+    # whether Steam happens to be running on the machine executing it.
+    monkeypatch.setattr(exporter, "steam_is_running", lambda: False)
     result = exporter.export([make_game(library)], library)
 
     assert result.errors

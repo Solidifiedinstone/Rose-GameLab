@@ -105,6 +105,17 @@ python -m venv --system-site-packages .venv
 .venv/bin/rose-gamelab
 ```
 
+To get a launcher icon in your application menu or dock:
+
+```sh
+./packaging/install-desktop-entry.sh
+```
+
+That installs a desktop entry and icons under `~/.local`, needs no root, and
+can be undone with `--uninstall`. It writes the launcher's absolute path into
+the entry, because desktop files do not inherit your shell's `PATH` — a bare
+command name works in a terminal and then silently fails from a dock.
+
 ## Command line
 
 GameLab works headlessly too:

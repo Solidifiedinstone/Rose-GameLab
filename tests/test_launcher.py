@@ -353,3 +353,31 @@ def test_nonexistent_binary_fails_clearly(library, profiles, tmp_path):
         launcher.launch(game_id)
 
     assert "not found" in str(exc.value).lower()
+
+
+def test_ensure_default_recovers_when_no_profile_is_flagged(profiles):
+    """Regression: startup crashed with a UNIQUE violation on profile name.
+
+    ensure_default_exists() assumed "nothing flagged default" meant "no
+    profiles at all", so it tried to insert a second profile called
+    "Default". Two GameLab instances sharing a library produce exactly that
+    state, and the crash stopped the whole application from opening.
+    """
+    profile_id = profiles.create(LaunchProfile(name="Default", is_default=True))
+    profiles.db.execute("UPDATE launch_profiles SET is_default = 0")
+
+    recovered = profiles.ensure_default_exists()
+
+    assert recovered.id == profile_id
+    assert len(profiles.list_profiles()) == 1
+    assert profiles.get_default() is not None
+
+
+def test_ensure_default_promotes_an_existing_profile(profiles):
+    profiles.create(LaunchProfile(name="Handheld"))
+    profiles.db.execute("UPDATE launch_profiles SET is_default = 0")
+
+    recovered = profiles.ensure_default_exists()
+
+    assert recovered.name == "Handheld"
+    assert len(profiles.list_profiles()) == 1

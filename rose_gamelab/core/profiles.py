@@ -224,10 +224,26 @@ class ProfileStore:
         return self.get_default() or LaunchProfile(name="None")
 
     def ensure_default_exists(self) -> LaunchProfile:
-        """Create a starter default profile on first run if there is none."""
+        """Guarantee exactly one default profile exists, and return it.
+
+        Called on every startup, so it has to cope with a database that is not
+        in the state it expects — including one where profiles exist but none
+        carries the default flag, which happens if two GameLab instances open
+        the same library at once. Assuming "no flagged default" meant "no
+        profiles at all" made startup crash with a UNIQUE violation on the
+        profile name, and a crash here means the whole application will not
+        open.
+        """
         existing = self.get_default()
         if existing:
             return existing
+
+        # Some profiles exist, just none flagged. Promote the first rather than
+        # adding another.
+        profiles = self.list_profiles()
+        if profiles:
+            self.set_default(profiles[0].id)
+            return self.get_default() or profiles[0]
 
         profile = LaunchProfile(
             name="Default",
@@ -236,5 +252,19 @@ class ProfileStore:
             # costs nothing when absent, so it is the only opt-out default.
             use_gamemode=True,
         )
-        profile.id = self.create(profile)
+        try:
+            profile.id = self.create(profile)
+        except sqlite3.IntegrityError:
+            # Another instance won the race between our check and our insert.
+            existing = self.get_default()
+            if existing:
+                return existing
+            row = self.db.query_one(
+                "SELECT * FROM launch_profiles WHERE name = ?", ("Default",)
+            )
+            if row is None:
+                raise
+            profile = LaunchProfile.from_row(row)
+            self.set_default(profile.id)
+
         return profile
