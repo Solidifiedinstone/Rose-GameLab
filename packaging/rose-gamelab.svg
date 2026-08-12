@@ -2,54 +2,98 @@
   <!--
     Rose GameLab application icon.
 
-    A rose whose bloom doubles as a game-controller d-pad-and-buttons cluster:
-    the project is a game launcher, and the rose is the R.O.S.E. mark shared
-    across every project in the family.
+    A white rose, following the silhouette of Joan G. Stark's ASCII "rose
+    (3/99)" that every R.O.S.E. project uses: a side-on bud of wrapped petals
+    over a stem that bends right, with a leaf either side.
 
-    Drawn as flat shapes with no gradients on small detail, so it stays legible
-    at 16px in a dock as well as 256px in a launcher grid.
+    The petals are drawn as overlapping SHAPES rather than one continuous
+    spiral stroke. A literal spiral reads as a snail shell at any size; a rose
+    is legible because of the layered wraps and the small tight centre they
+    enclose.
+
+    White bloom so it stands clear of the dark tile and of the pink accent used
+    through the rest of the interface; the stem keeps the project green
+    (#3FA860) the ASCII rose is drawn in elsewhere.
   -->
   <defs>
-    <linearGradient id="petal" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f08fa6"/>
-      <stop offset="100%" stop-color="#c9445f"/>
-    </linearGradient>
-    <linearGradient id="backdrop" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#1c1c24"/>
       <stop offset="100%" stop-color="#08080b"/>
     </linearGradient>
+    <linearGradient id="outer" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#cfc9da"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fbf9fc"/>
+      <stop offset="100%" stop-color="#bcb5cb"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4f1f7"/>
+      <stop offset="100%" stop-color="#a79fba"/>
+    </linearGradient>
   </defs>
 
-  <!-- Rounded-square backdrop, matching the app's own corner radius. -->
-  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#backdrop)"/>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#tile)"/>
   <rect x="8" y="8" width="240" height="240" rx="54" fill="none"
         stroke="#2a2a34" stroke-width="2"/>
 
-  <!-- Stem -->
-  <path d="M128 150 C128 176, 128 190, 128 208"
+  <!-- ── Stem, bending right as in the ASCII art ───────────────── -->
+  <path d="M128 140 C132 164, 144 182, 158 198 C164 205, 167 212, 167 219"
         stroke="#3FA860" stroke-width="9" stroke-linecap="round" fill="none"/>
 
-  <!-- Leaves -->
-  <path d="M128 176 C104 172, 88 158, 84 140 C108 138, 124 152, 128 176 Z"
+  <!-- Leaf, left of the stem -->
+  <path d="M139 176 C117 180, 99 173, 90 156 C113 148, 132 156, 139 176 Z"
         fill="#3FA860"/>
-  <path d="M128 192 C152 190, 168 178, 172 160 C148 158, 132 170, 128 192 Z"
-        fill="#348a4f"/>
+  <path d="M137 174 C124 169, 110 163, 97 157"
+        stroke="#2b7a44" stroke-width="3" fill="none" stroke-linecap="round"/>
 
-  <!-- Outer petals -->
-  <circle cx="128" cy="104" r="54" fill="url(#petal)"/>
-  <path d="M128 50 C158 50, 182 74, 182 104 C182 134, 158 158, 128 158 Z"
-        fill="#b83a55" opacity="0.55"/>
+  <!-- Leaf, right of the stem -->
+  <path d="M152 196 C173 198, 190 189, 197 172 C175 166, 157 177, 152 196 Z"
+        fill="#349050"/>
+  <path d="M154 194 C167 189, 181 182, 192 174"
+        stroke="#256439" stroke-width="3" fill="none" stroke-linecap="round"/>
 
-  <!-- Inner bloom, arranged as a controller face: d-pad left, buttons right. -->
-  <circle cx="128" cy="104" r="34" fill="#7d2338" opacity="0.9"/>
+  <!-- Sepals under the bloom -->
+  <path d="M112 130 C118 146, 130 152, 144 148 C140 134, 126 126, 112 130 Z"
+        fill="#3FA860"/>
 
-  <!-- D-pad -->
-  <rect x="98" y="99" width="26" height="10" rx="3" fill="#f6e9ec"/>
-  <rect x="106" y="91" width="10" height="26" rx="3" fill="#f6e9ec"/>
+  <!-- ── Bloom ─────────────────────────────────────────────────── -->
+  <!-- Outermost petal cup. -->
+  <path d="M128 38
+           C148 30, 172 42, 180 60
+           C198 68, 196 94, 186 108
+           C190 128, 170 146, 150 144
+           C138 156, 114 154, 104 141
+           C 84 140,  70 120,  74 102
+           C 62  86,  72  62,  90  54
+           C 98  38, 116  32, 128  38 Z"
+        fill="url(#outer)"/>
 
-  <!-- Face buttons -->
-  <circle cx="146" cy="94" r="5.5" fill="#f6e9ec"/>
-  <circle cx="157" cy="105" r="5.5" fill="#f6e9ec"/>
-  <circle cx="146" cy="116" r="5.5" fill="#f6e9ec"/>
-  <circle cx="135" cy="105" r="5.5" fill="#f6e9ec"/>
+  <!-- Left outer petal, folding across the front. -->
+  <path d="M68 96 C68 122, 88 142, 116 146 C104 130, 98 112, 100 94
+           C102 74, 116 60, 134 58 C98 54, 68 70, 68 96 Z"
+        fill="url(#mid)"/>
+
+  <!-- Right outer petal, wrapping the other way. -->
+  <path d="M188 96 C188 70, 166 50, 138 50 C154 62, 162 78, 160 96
+           C158 116, 146 130, 128 134 C164 140, 188 122, 188 96 Z"
+        fill="url(#mid)"/>
+
+  <!-- Inner cone the petals wrap around. -->
+  <path d="M128 66 C146 66, 158 80, 158 98 C158 118, 144 132, 126 132
+           C110 132, 98 118, 98 100 C98 80, 110 66, 128 66 Z"
+        fill="url(#core)"/>
+
+  <!-- The tight centre: two short wraps, not a full spiral. -->
+  <path d="M112 104 C112 88, 126 78, 140 84"
+        stroke="#7d7392" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M144 100 C144 114, 130 122, 118 116"
+        stroke="#7d7392" stroke-width="5" fill="none" stroke-linecap="round"/>
+
+  <!-- Petal separations, keeping the layers readable. -->
+  <path d="M100 94 C102 74, 116 60, 134 58"
+        stroke="#9d95b0" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M160 96 C158 116, 146 130, 128 134"
+        stroke="#9d95b0" stroke-width="3.5" fill="none" stroke-linecap="round"/>
 </svg>
