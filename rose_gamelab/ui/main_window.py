@@ -18,7 +18,6 @@ from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -383,21 +382,27 @@ class MainWindow(QMainWindow):
     # ── Sources and scanning ──────────────────────────────────────
 
     def add_rom_folder(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Choose a ROM folder")
-        if not directory:
-            return
+        """Open the guided Add Source dialog."""
+        from rose_gamelab.ui.add_source import AddSourceDialog
 
+        dialog = AddSourceDialog(self.library, self.theme, parent=self)
+        dialog.source_chosen.connect(self._scan_new_source)
+        dialog.exec()
+
+    def _scan_new_source(self, kind: str, directory: str, system) -> None:
         source_id = f"roms:{directory}"
         self.library.register_source(
             source_id,
             name=directory.rstrip("/").rsplit("/", 1)[-1] or directory,
             type="rom_folder",
             path=directory,
+            system=system,
         )
 
         def work(report):
             return self.scanner.scan_folder(
                 directory,
+                system=system,
                 source_id=source_id,
                 progress=lambda message: report(message),
             )

@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from rose_gamelab.core import emulator_detect
 from rose_gamelab.core.emulator import get_system
 from rose_gamelab.core.library import Library
 from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
@@ -92,7 +93,7 @@ def build_command(
     target: str,
     profile: LaunchProfile,
     emulator: Optional[str] = None,
-    emulator_path: Optional[str] = None,
+    emulator_path: Optional[list[str] | str] = None,
     args: Optional[str] = None,
     system: Optional[str] = None,
     retroarch_path: Optional[str] = None,
@@ -145,7 +146,8 @@ def build_command(
             # RetroArch with an explicit libretro core.
             command = [retroarch_path, "-L", core_path, target]
         elif emulator_path:
-            command = [emulator_path, target]
+            # A list, since Flatpak emulators are `flatpak run <id> <rom>`.
+            command = [*emulator_path, target] if isinstance(emulator_path, list) else [emulator_path, target]
         else:
             raise LaunchError(
                 f"No emulator configured for {system or 'this system'}. "
@@ -185,17 +187,27 @@ class Launcher:
 
     # ── Resolution ────────────────────────────────────────────────
 
-    def resolve_emulator(self, system_id: str) -> Optional[str]:
-        """Find the emulator binary for a system: user setting, then PATH."""
+    def resolve_emulator(self, system_id: str) -> Optional[list[str]]:
+        """How to run this system's emulator, as a command, or None.
+
+        Returns a COMMAND rather than a path, because a large share of Linux
+        emulators are Flatpaks whose invocation is `flatpak run <id>` and which
+        put nothing on PATH at all. Checking only PATH reported "not installed"
+        on machines where the emulator was installed and working.
+
+        A user-configured path always wins.
+        """
         configured = self.emulator_paths.get(system_id)
         if configured and Path(configured).is_file():
-            return configured
+            return [configured]
 
-        system = get_system(system_id)
-        if not system or not system.default_core:
-            return None
+        option = emulator_detect.best_for(system_id)
+        if option is not None and option.kind != "retroarch":
+            return list(option.command)
 
-        return shutil.which(system.default_core)
+        # RetroArch is handled through the core path instead, so that the
+        # right libretro core is passed rather than bare RetroArch.
+        return None
 
     def resolve_core(self, system_id: str) -> Optional[str]:
         """Find a libretro core for a system, if RetroArch is configured."""
