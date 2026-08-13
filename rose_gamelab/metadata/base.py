@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
+from rose_gamelab import __version__
+
 #: Sent by every provider. Several of the services GameLab reads from are
 #: donated infrastructure that blocks unidentified clients outright — Wikidata
 #: returns 403 to the default `python-requests` agent — and all of them deserve
@@ -15,7 +17,12 @@ from typing import Optional
 #: Note this must be ASSIGNED onto a session's headers, never `setdefault`:
 #: requests populates its own User-Agent at construction, so setdefault always
 #: loses and the descriptive name never leaves the machine.
-USER_AGENT = "Rose-GameLab/0.1 (+https://github.com/Solidifiedinstone/Rose-GameLab)"
+#: The version is read rather than written: this said 0.1 for the whole of 0.1
+#: and 0.2, so every server we identify ourselves to was told the wrong one.
+USER_AGENT = (
+    f"Rose-GameLab/{__version__} "
+    "(+https://github.com/Solidifiedinstone/Rose-GameLab)"
+)
 
 #: Trademark noise that appears in a store's name for a game but never in a
 #: launcher's, a filename's, or a user's.

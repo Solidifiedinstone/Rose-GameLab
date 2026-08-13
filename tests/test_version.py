@@ -41,3 +41,40 @@ def test_the_cli_reports_the_same_version():
 
     assert result.exit_code == 0
     assert declared_version() in result.output
+
+
+# ── What GameLab tells servers it is ──────────────────────────────
+
+def test_the_user_agent_carries_the_real_version():
+    """It said 0.1 through the whole of 0.1 and 0.2 — a hardcoded literal that
+    nothing updated and nothing checked."""
+    from rose_gamelab.metadata.base import USER_AGENT
+
+    assert declared_version() in USER_AGENT
+    assert "Rose-GameLab/" in USER_AGENT
+
+
+def test_the_user_agent_actually_reaches_the_session():
+    """Regression: this was applied with `setdefault`, and requests populates
+    its own User-Agent when a Session is constructed — so setdefault always
+    lost and the descriptive name never left the machine."""
+    from rose_gamelab.metadata.base import USER_AGENT
+    from rose_gamelab.metadata.retroachievements import RetroAchievementsProvider
+
+    provider = RetroAchievementsProvider(username="x", api_key="y")
+
+    assert provider.session.headers["User-Agent"] == USER_AGENT
+
+
+def test_no_provider_hardcodes_a_version():
+    """One copy of the string, derived from one source."""
+    import re
+    from pathlib import Path
+
+    package = Path(__file__).resolve().parent.parent / "rose_gamelab"
+    offenders = [
+        path.name for path in package.rglob("*.py")
+        if re.search(r"Rose-GameLab/\d", path.read_text(encoding="utf-8"))
+        and path.name != "base.py"
+    ]
+    assert offenders == []

@@ -226,7 +226,7 @@ def test_fingerprint_is_stable_when_nothing_changes(sysfs):
 # much as a pad dying. It is shown for that reason and no other — it must never
 # be configured as if it were a controller.
 
-def peripheral(kind="mouse", name="Logitech G502 X LS", **kwargs):
+def peripheral(kind="mouse", name="Wireless Gaming Mouse", **kwargs):
     handlers = {"mouse": frozenset({"event17", "mouse0"}),
                 "keyboard": frozenset({"event15", "kbd"}),
                 "gamepad": frozenset({"event20", "js0"})}[kind]
@@ -301,11 +301,11 @@ def test_a_mouse_is_never_handed_to_a_game(sysfs, monkeypatch):
 
 def test_a_peripheral_is_not_looked_up_in_the_controller_database(sysfs):
     """There is no button layout for a mouse; its own name is what to show."""
-    device = peripheral("mouse", name="Logitech G502 X LS")
+    device = peripheral("mouse", name="Wireless Gaming Mouse")
     give_battery(sysfs, device)
 
     status = status_for(device)
 
-    assert status.name == "Logitech G502 X LS"
+    assert status.name == "Wireless Gaming Mouse"
     assert not status.recognised
     assert not status.is_gamepad

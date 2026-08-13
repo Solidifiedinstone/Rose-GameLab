@@ -30,7 +30,12 @@ from typing import Optional
 
 import requests
 
-from rose_gamelab.metadata.base import GameMetadata, MetadataProvider, ProviderError
+from rose_gamelab.metadata.base import (
+    USER_AGENT,
+    GameMetadata,
+    MetadataProvider,
+    ProviderError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +128,10 @@ class OpenVGDBProvider(MetadataProvider):
         download never leaves a truncated database that looks valid.
         """
         session = session or requests.Session()
+        # This talks to GitHub's API, which rate-limits anonymous callers
+        # harder and asks them to identify themselves. Assigned, not
+        # setdefault: requests has already put its own name there.
+        session.headers["User-Agent"] = USER_AGENT
 
         try:
             response = session.get(RELEASE_API, timeout=30)

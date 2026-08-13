@@ -254,6 +254,9 @@ class FakeSession:
     def __init__(self, release_payload, archive_bytes):
         self.release_payload = release_payload
         self.archive_bytes = archive_bytes
+        # A real requests.Session has this, and GameLab writes its User-Agent
+        # into it. A double without it hides that the code ever did so.
+        self.headers: dict[str, str] = {}
 
     def get(self, url, timeout=None, stream=False):
         if "api.github.com" in url:
@@ -316,3 +319,16 @@ def test_implausibly_small_download_is_rejected(tmp_path):
     provider = OpenVGDBProvider(tmp_path / "db.sqlite")
     with pytest.raises(ProviderError):
         provider.download(session=session)
+
+
+def test_the_download_identifies_itself_to_github(tmp_path):
+    """GitHub rate-limits anonymous callers harder and asks who is calling."""
+    from rose_gamelab.metadata.base import USER_AGENT
+
+    payload = {"assets": [{"name": "openvgdb.zip", "browser_download_url": "https://x/o.zip"}]}
+    session = FakeSession(payload, make_archive(b"\x00" * (MIN_DB_BYTES + 10)))
+    provider = OpenVGDBProvider(path=tmp_path / "db.sqlite")
+
+    provider.download(session=session)
+
+    assert session.headers["User-Agent"] == USER_AGENT

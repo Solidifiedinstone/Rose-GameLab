@@ -153,7 +153,7 @@ def peripheral_status(kind, name, percent=None):
 
 def test_a_mouse_is_not_drawn_as_a_gamepad():
     """A mouse with a controller icon is worse than no icon at all."""
-    text = describe([peripheral_status("mouse", "G502 X LS", 86)])
+    text = describe([peripheral_status("mouse", "Wireless Gaming Mouse", 86)])
 
     assert "🖱" in text
     assert "🎮" not in text
@@ -165,7 +165,7 @@ def test_a_keyboard_has_its_own_glyph():
 
 
 def test_a_pad_and_a_mouse_are_both_named():
-    text = describe([status(percent=70), peripheral_status("mouse", "G502", 86)])
+    text = describe([status(percent=70), peripheral_status("mouse", "Wireless Gaming Mouse", 86)])
 
     assert "🎮" in text
     assert "🖱" in text
@@ -176,7 +176,7 @@ def test_many_devices_count_only_the_pads():
     text = describe([
         status(name="P1", percent=90),
         status(name="P2", percent=80),
-        peripheral_status("mouse", "G502", 15),
+        peripheral_status("mouse", "Wireless Gaming Mouse", 15),
     ])
 
     assert "2 controllers" in text

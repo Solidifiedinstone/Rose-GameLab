@@ -42,7 +42,12 @@ from typing import Any, Iterable, Optional
 import requests
 
 from rose_gamelab.core.hashing import CHUNK_SIZE, detect_header_size
-from rose_gamelab.metadata.base import GameMetadata, MetadataProvider, ProviderError
+from rose_gamelab.metadata.base import (
+    USER_AGENT,
+    GameMetadata,
+    MetadataProvider,
+    ProviderError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -367,10 +372,12 @@ class RetroAchievementsProvider(MetadataProvider):
         self._api_key = api_key or None
 
         self.session = session or requests.Session()
-        self.session.headers.setdefault(
-            "User-Agent",
-            "Rose-GameLab/0.1 (+https://github.com/Solidifiedinstone/Rose-GameLab)",
-        )
+        # ASSIGNED, not setdefault — requests fills in its own User-Agent when
+        # the session is constructed, so setdefault always lost and this
+        # provider was identifying itself as python-requests to an API that
+        # asks callers to say who they are. The shared constant, so the version
+        # is right and there is one copy of it.
+        self.session.headers["User-Agent"] = USER_AGENT
         # Tests pass rate_limit=0 to run against fakes without sleeping.
         self.limiter = RateLimiter(rate_limit)
         #: RA console name -> id, fetched once. None until asked for.
