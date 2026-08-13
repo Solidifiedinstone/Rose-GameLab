@@ -361,6 +361,12 @@ class BigPictureWindow(QWidget):
         self.shelves: list[Shelf] = []
         self.shelf_index = 0
 
+        # Created here rather than when work is found, so an empty library —
+        # which builds no shelves at all — does not leave this undefined.
+        self._background = QTimer(self)
+        self._background.setInterval(BACKGROUND_COVER_MS)
+        self._background.timeout.connect(self._load_a_few_covers)
+
         self.setWindowTitle("Rose GameLab — Big Picture")
         self.setStyleSheet(f"background-color: {theme.background};")
         # The whole window takes key events; individual tiles never focus, so
@@ -520,6 +526,10 @@ class BigPictureWindow(QWidget):
         self._select(row, index)
         self._launch_current()
 
+    @property
+    def _work_remaining(self) -> bool:
+        return not all(shelf.fully_loaded() for shelf in self.shelves)
+
     def _start_background_covers(self) -> None:
         """Fill in the remaining covers a few at a time, while idle.
 
@@ -529,12 +539,13 @@ class BigPictureWindow(QWidget):
         trickle in between events, in batches small enough that navigation
         never waits on them.
         """
-        self._background = QTimer(self)
-        self._background.setInterval(BACKGROUND_COVER_MS)
-        self._background.timeout.connect(self._load_a_few_covers)
         self._background.start()
 
     def _load_a_few_covers(self) -> None:
+        if not self.shelves:
+            self._background.stop()
+            return
+
         remaining = BACKGROUND_COVER_BATCH
 
         for shelf in self.shelves:
@@ -560,6 +571,10 @@ class BigPictureWindow(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        # Reopening picks the work back up: the window object survives being
+        # closed, so there may be covers left from last time.
+        if self._work_remaining and not self._background.isActive():
+            self._background.start()
         # Without this the first focusable child holds the keyboard, and every
         # arrow key goes to it instead of to the navigation below.
         self.setFocus()
@@ -634,5 +649,11 @@ class BigPictureWindow(QWidget):
         self.now_showing.setText(f"Launching {game.title}…")
 
     def closeEvent(self, event) -> None:
+        # The window object outlives being closed — the main window keeps a
+        # reference to it — so without this the timer goes on decoding covers
+        # for a window nobody can see. Closing Big Picture usually means a game
+        # has just started, which is the worst possible moment to spend the
+        # machine on artwork.
+        self._background.stop()
         self.closed.emit()
         super().closeEvent(event)

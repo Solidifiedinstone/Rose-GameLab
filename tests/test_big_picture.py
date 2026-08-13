@@ -404,3 +404,32 @@ def test_shelf_queries_are_limited_rather_than_sliced(library, qt_app):
     assert calls, "the window should query the library"
     assert all(call.get("limit") for call in calls)
     win.close()
+
+
+def test_the_background_pass_stops_when_the_window_closes(big_library):
+    """The window object outlives being closed — the main window keeps a
+    reference — so an unstopped timer would go on decoding covers for a window
+    nobody can see, right when a game has just started."""
+    assert big_library._background.isActive()
+
+    big_library.close()
+
+    assert not big_library._background.isActive()
+
+
+def test_reopening_picks_the_remaining_work_back_up(big_library):
+    big_library.close()
+    big_library.show()
+
+    assert big_library._background.isActive()
+
+
+def test_an_empty_library_has_no_background_work_and_does_not_crash(qt_app, library):
+    """Regression: the timer was only created when shelves existed."""
+    window = BigPictureWindow(library, FakeLauncher(), next(iter(THEMES.values())))
+    window.show()
+
+    window._load_a_few_covers()      # must not raise
+
+    assert not window._background.isActive()
+    window.close()

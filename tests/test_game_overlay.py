@@ -247,3 +247,28 @@ def test_closing_is_announced(overlay, game):
     overlay.close()
 
     assert seen == [True]
+
+
+def test_closing_during_a_screenshot_does_not_bring_the_panel_back(
+    overlay, game, monkeypatch
+):
+    """Press screenshot, press Escape to get back to the game — the panel must
+    not reappear over it a quarter of a second later and steal focus."""
+    monkeypatch.setattr(game_overlay.shutil, "which", lambda _name: None)
+    overlay.show_for(game)
+
+    overlay.take_screenshot()
+    overlay.close()
+    overlay._capture("Anything")
+
+    assert not overlay.isVisible()
+
+
+def test_a_screenshot_still_restores_the_panel_normally(overlay, game, monkeypatch):
+    monkeypatch.setattr(game_overlay.shutil, "which", lambda _name: None)
+    overlay.show_for(game)
+
+    overlay.take_screenshot()
+    overlay._capture("Anything")
+
+    assert overlay.isVisible()

@@ -161,6 +161,8 @@ class GameOverlay(QWidget):
         self.saves = save_manager or SaveManager(library)
         self.game = None
         self._elapsed_seconds = 0
+        #: True between hiding for a screenshot and restoring afterwards.
+        self._capture_pending = False
 
         self.setWindowTitle("Rose GameLab")
         # Above the game, and not in the way of it: a panel, not a full screen.
@@ -371,11 +373,21 @@ class GameOverlay(QWidget):
 
         # Hide first: the panel is a window above the game, so it would appear
         # in its own screenshot.
+        self._capture_pending = True
         self.hide()
         QTimer.singleShot(250, lambda: self._capture(title))
 
     def _capture(self, title: str) -> None:
         path = take_screenshot(title)
+
+        if not self._capture_pending:
+            # Closed while the panel was hidden for the shot. Pressing Escape
+            # to get back to the game and having this jump back over it a
+            # quarter of a second later — stealing focus — is not what anyone
+            # asked for.
+            return
+
+        self._capture_pending = False
         self.show()
         self.raise_()
         self.activateWindow()
@@ -414,6 +426,8 @@ class GameOverlay(QWidget):
         super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:
+        # Cancels any screenshot restore still in flight.
+        self._capture_pending = False
         self._tick.stop()
         self.closed.emit()
         super().closeEvent(event)
