@@ -358,15 +358,47 @@ def system_directory() -> Optional[Path]:
 #: one, SwanStation does not start — and "crashes on launch" is what that
 #: looks like from the outside, which is why this is checked and said out
 #: loud rather than left for the user to discover.
+#: Several names per system on purpose. A PlayStation BIOS is not one file —
+#: every region and revision has its own, and a machine with SCPH1001.BIN on it
+#: is a machine with a working PlayStation BIOS. Listing only the three most
+#: cited names meant walking straight past somebody's perfectly good dump.
 BIOS_REQUIRED: dict[str, tuple[str, ...]] = {
-    "swanstation": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
-    "mednafen_psx": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
-    "pcsx_rearmed": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
+    "swanstation": (
+        "scph5500.bin", "scph5501.bin", "scph5502.bin",
+        "scph1001.bin", "scph1000.bin", "scph1002.bin",
+        "scph7001.bin", "scph7002.bin", "scph7003.bin",
+        "scph101.bin", "scph102.bin", "scph103.bin",
+        "psxonpsp660.bin", "ps1_rom.bin",
+    ),
+    "mednafen_psx": (
+        "scph5500.bin", "scph5501.bin", "scph5502.bin",
+        "scph1001.bin", "scph7001.bin", "scph101.bin",
+    ),
+    "pcsx_rearmed": (
+        "scph5500.bin", "scph5501.bin", "scph5502.bin",
+        "scph1001.bin", "scph7001.bin", "scph101.bin",
+    ),
     "mednafen_saturn": ("sega_101.bin", "mpr-17933.bin"),
     "mednafen_pce": ("syscard3.pce",),
     "flycast": ("dc_boot.bin", "dc_flash.bin"),
     "opera": ("panafz1.bin", "panafz10.bin", "goldstar.bin"),
-    "pcsx2": ("ps2-0230a-20080220.bin",),
+    # PlayStation 2 firmware is dumped under whatever name the dumper chose —
+    # SCPH-70012_BIOS_V12_USA_200.BIN and a hundred variations — so this lists
+    # the canonical one and discovery leans on the patterns below instead.
+    "pcsx2": ("ps2-0230a-20080220.bin", "scph39001.bin", "scph70012.bin"),
+}
+
+#: Filename patterns used only for *finding* firmware, where the exact names
+#: above are used for deciding whether a core is satisfied. A dump named
+#: SCPH-70012_BIOS_V12_USA_200.BIN is a PS2 BIOS that no fixed list will ever
+#: contain, and it is more useful to notice it and let the user decide.
+BIOS_PATTERNS: dict[str, tuple[str, ...]] = {
+    "swanstation": ("scph*.bin", "psxonpsp*.bin", "ps1_rom*.bin"),
+    "pcsx2": ("scph*.bin", "ps2-*.bin", "*ps2*bios*.bin"),
+    "flycast": ("dc_boot*.bin", "dc_flash*.bin", "naomi*.zip"),
+    "mednafen_saturn": ("sega_101*.bin", "mpr-*.bin", "saturn_bios*.bin"),
+    "mednafen_pce": ("syscard*.pce",),
+    "opera": ("panafz*.bin", "goldstar*.bin", "3do*.bin"),
 }
 
 
@@ -381,8 +413,13 @@ class BiosNeed:
 
     @property
     def summary(self) -> str:
-        names = " or ".join(self.filenames)
-        return f"{', '.join(self.systems)} — {names}"
+        # Only the first few names. A PlayStation accepts fourteen different
+        # dumps and listing them all is a wall of text that answers nobody's
+        # question — the point is "one of these", not an inventory.
+        shown = " or ".join(self.filenames[:3])
+        if len(self.filenames) > 3:
+            shown += f" (or {len(self.filenames) - 3} other accepted dumps)"
+        return f"{', '.join(self.systems)} — {shown}"
 
 
 def bios_needs(library=None) -> list[BiosNeed]:
@@ -445,6 +482,146 @@ class BiosInstallResult:
         if self.errors:
             parts.append(f"{len(self.errors)} failed")
         return ", ".join(parts) or "nothing to do"
+
+
+#: Where firmware tends to already be on a machine that has emulated anything
+#: before. Other emulators keep their own copies, and people who dumped a BIOS
+#: usually left it next to their games or in whatever they downloaded it with.
+BIOS_SEARCH_DIRECTORIES = (
+    "~/.config/pcsx2/bios",
+    "~/.var/app/net.pcsx2.PCSX2/config/PCSX2/bios",
+    "~/.config/duckstation/bios",
+    "~/.var/app/org.duckstation.DuckStation/config/duckstation/bios",
+    "~/.config/flycast",
+    "~/.var/app/org.flycast.Flycast/config/flycast",
+    "~/.config/mednafen/firmware",
+    "~/.config/retroarch/system",
+    "~/BIOS",
+    "~/bios",
+    "~/Games",
+    "~/ROMs",
+    "~/roms",
+    "~/Downloads",
+)
+
+#: How deep to look inside each of those. Firmware sits at the top of a folder
+#: or one level in; walking an entire home directory to find a 512 KB file is
+#: not a trade worth making.
+SEARCH_DEPTH = 3
+
+#: Smaller than any real firmware dump. Filters out the stub files and text
+#: notes that sit alongside them in downloads.
+MIN_BIOS_BYTES = 16 * 1024
+
+
+@dataclass(frozen=True)
+class FoundBios:
+    """A firmware file discovered somewhere on the machine."""
+
+    path: Path
+    #: Cores this file would satisfy, by the name it has.
+    cores: tuple[str, ...]
+    already_installed: bool
+
+
+def _known_bios_names() -> dict[str, tuple[str, ...]]:
+    """Filename (lower case) -> the cores that want it."""
+    names: dict[str, list[str]] = {}
+    for core, filenames in BIOS_REQUIRED.items():
+        for filename in filenames:
+            names.setdefault(filename.lower(), []).append(core)
+    return {name: tuple(cores) for name, cores in names.items()}
+
+
+def _cores_wanting(filename: str) -> tuple[str, ...]:
+    """Which cores a file could be for, by exact name first then by pattern."""
+    import fnmatch
+
+    name = filename.lower()
+
+    exact = _known_bios_names().get(name)
+    if exact:
+        return exact
+
+    matched = [
+        core for core, patterns in BIOS_PATTERNS.items()
+        if any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+    ]
+    return tuple(matched)
+
+
+def find_bios(extra_directories=None) -> list[FoundBios]:
+    """Look for firmware already on this machine.
+
+    Matched on filename, which is what the emulators themselves match on. No
+    attempt is made to verify that a file really is the firmware it is named
+    after: that would mean shipping a table of checksums for files GameLab
+    will not distribute, and a wrong entry would reject somebody's perfectly
+    good dump.
+
+    Searching is deliberately shallow and confined to the places firmware
+    actually collects. Walking a home directory to find a 512 KB file is not a
+    trade worth making, and a launcher that reads every file somebody owns is
+    not one to trust.
+    """
+    destination = system_directory()
+    present = set()
+    if destination and destination.is_dir():
+        try:
+            present = {path.name.lower() for path in destination.iterdir()}
+        except OSError:
+            present = set()
+
+    directories = [Path(entry).expanduser() for entry in BIOS_SEARCH_DIRECTORIES]
+    directories += [Path(entry).expanduser() for entry in (extra_directories or ())]
+
+    found: dict[str, FoundBios] = {}
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+
+        for path in _walk(directory, SEARCH_DEPTH):
+            name = path.name.lower()
+            cores = _cores_wanting(path.name)
+            if not cores:
+                continue
+            try:
+                if path.stat().st_size < MIN_BIOS_BYTES:
+                    continue
+            except OSError:
+                continue
+
+            # The same firmware is often in several emulators at once; one
+            # entry per filename is what the user is choosing between.
+            if name in found:
+                continue
+
+            found[name] = FoundBios(
+                path=path,
+                cores=cores,
+                already_installed=name in present,
+            )
+
+    return sorted(found.values(), key=lambda entry: entry.path.name.lower())
+
+
+def _walk(root: Path, depth: int):
+    """Files in `root`, no deeper than `depth` levels."""
+    if depth < 0:
+        return
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return
+
+    for entry in entries:
+        try:
+            if entry.is_file():
+                yield entry
+            elif entry.is_dir() and not entry.is_symlink() and depth > 0:
+                yield from _walk(entry, depth - 1)
+        except OSError:
+            continue
 
 
 def install_bios(paths, *, directory: Optional[Path] = None) -> BiosInstallResult:

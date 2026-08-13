@@ -560,3 +560,121 @@ def test_no_system_directory_is_explained_rather_than_crashed(monkeypatch, tmp_p
 
     assert result.errors
     assert "system directory" in result.summary
+
+
+# ── Finding firmware already on the machine ───────────────────────
+
+def test_a_bios_is_found_where_it_was_downloaded(monkeypatch, tmp_path):
+    """Most people who have emulated anything already have these somewhere."""
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(downloads),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    found = retroarch.find_bios()
+
+    assert [entry.path.name for entry in found] == ["scph5501.bin"]
+    assert "swanstation" in found[0].cores
+
+
+def test_a_dump_named_something_else_is_still_recognised(monkeypatch, tmp_path):
+    """A PlayStation BIOS is not one file — every region and revision has its
+    own, and SCPH1001.BIN is as valid as the three names usually cited."""
+    folder = tmp_path / "roms"
+    folder.mkdir()
+    (folder / "SCPH1001.BIN").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(folder),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    found = retroarch.find_bios()
+
+    assert found
+    assert "swanstation" in found[0].cores
+
+
+def test_an_unusually_named_ps2_dump_is_noticed(monkeypatch, tmp_path):
+    """PS2 firmware is dumped under whatever name the dumper chose, so no
+    fixed list will ever contain it."""
+    folder = tmp_path / "roms"
+    folder.mkdir()
+    (folder / "SCPH-70012_BIOS_V12_USA_200.BIN").write_bytes(
+        b"x" * (retroarch.MIN_BIOS_BYTES + 1)
+    )
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(folder),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    found = retroarch.find_bios()
+
+    assert found
+    assert "pcsx2" in found[0].cores
+
+
+def test_files_that_are_far_too_small_are_ignored(monkeypatch, tmp_path):
+    """Stubs and text notes sit alongside real dumps in downloads folders."""
+    folder = tmp_path / "roms"
+    folder.mkdir()
+    (folder / "scph5501.bin").write_bytes(b"nope")
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(folder),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    assert retroarch.find_bios() == []
+
+
+def test_rom_folders_are_searched_too(monkeypatch, tmp_path):
+    """A BIOS very often sits next to the games it is for."""
+    roms = tmp_path / "my-games"
+    roms.mkdir()
+    (roms / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", ())
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    assert retroarch.find_bios([str(roms)])
+
+
+def test_something_already_installed_is_marked_as_such(monkeypatch, tmp_path):
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+    system = tmp_path / "system"
+    system.mkdir()
+    (system / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(downloads),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: system)
+
+    assert retroarch.find_bios()[0].already_installed
+
+
+def test_the_search_does_not_wander_off_into_a_home_directory(monkeypatch, tmp_path):
+    """A launcher that reads every file somebody owns is not one to trust."""
+    deep = tmp_path / "a" / "b" / "c" / "d" / "e"
+    deep.mkdir(parents=True)
+    (deep / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES", (str(tmp_path),))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    assert retroarch.find_bios() == []
+
+
+def test_the_same_firmware_in_two_places_is_offered_once(monkeypatch, tmp_path):
+    """The same file is often in several emulators at once."""
+    for name in ("one", "two"):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "scph5501.bin").write_bytes(b"x" * (retroarch.MIN_BIOS_BYTES + 1))
+
+    monkeypatch.setattr(retroarch, "BIOS_SEARCH_DIRECTORIES",
+                        (str(tmp_path / "one"), str(tmp_path / "two")))
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "system")
+
+    assert len(retroarch.find_bios()) == 1
+
+
+def test_the_requirement_line_does_not_list_fourteen_filenames(monkeypatch, tmp_path):
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+
+    need = next(n for n in retroarch.bios_needs() if n.core == "swanstation")
+
+    assert need.summary.count(".bin") <= 3
+    assert "other accepted dumps" in need.summary

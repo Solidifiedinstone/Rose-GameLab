@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -236,6 +237,10 @@ class RetroArchTab(QWidget):
         )
         row.addWidget(self.bios_status, 1)
 
+        scan = QPushButton("Find mine")
+        scan.clicked.connect(self.scan_for_bios)
+        row.addWidget(scan)
+
         add = QPushButton("Add BIOS files…")
         add.clicked.connect(self.add_bios)
         row.addWidget(add)
@@ -263,6 +268,50 @@ class RetroArchTab(QWidget):
             else "RetroArch has no system directory yet — install it and run it once."
         )
 
+    def scan_for_bios(self) -> None:
+        """Look for firmware already on this machine and offer to import it.
+
+        Most people who have emulated anything before already have these files
+        somewhere — beside their games, in another emulator, still in the
+        folder they were downloaded to. Asking them to go and find them again
+        is asking them to do something GameLab can do in a few milliseconds.
+        """
+        # ROM folders too: a BIOS very often sits next to the games it is for.
+        sources = [
+            row["path"] for row in
+            self.library.db.query("SELECT path FROM sources WHERE path IS NOT NULL")
+        ]
+
+        found = [entry for entry in retroarch.find_bios(sources)
+                 if not entry.already_installed]
+
+        if not found:
+            self.bios_status.setText(
+                "Nothing found. Looked beside your games, in your other "
+                "emulators, and in Downloads."
+            )
+            return
+
+        listing = "\n".join(f"  {entry.path}" for entry in found[:8])
+        if len(found) > 8:
+            listing += f"\n  …and {len(found) - 8} more"
+
+        answer = QMessageBox.question(
+            self, "Firmware found",
+            f"Found {len(found)} file(s) that look like console firmware:\n\n"
+            f"{listing}\n\nCopy them where RetroArch reads them?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        result = retroarch.install_bios([entry.path for entry in found])
+        # Refreshed first: it rewrites the status line, so saying anything
+        # before it would be overwritten by the folder path.
+        self.refresh_bios()
+        self._rebuild_list()
+        self.bios_status.setText(result.summary)
+
     def add_bios(self) -> None:
         folder = retroarch.system_directory()
         if folder is None:
@@ -279,12 +328,12 @@ class RetroArchTab(QWidget):
             return
 
         result = retroarch.install_bios(chosen)
-        self.bios_status.setText(f"{result.summary} — {folder}")
         for error in result.errors[:3]:
             logger.warning("BIOS: %s", error)
 
         self.refresh_bios()
         self._rebuild_list()          # the warnings on the cores change too
+        self.bios_status.setText(f"{result.summary} — {folder}")
 
     def open_bios_folder(self) -> None:
         folder = retroarch.system_directory()
