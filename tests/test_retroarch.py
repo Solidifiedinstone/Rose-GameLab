@@ -467,3 +467,96 @@ def test_a_missing_system_directory_is_not_a_crash(monkeypatch, tmp_path):
     monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "nope")
 
     assert retroarch.missing_bios("swanstation")
+
+
+# ── Firmware ──────────────────────────────────────────────────────
+
+def test_what_is_still_needed_comes_first(library, monkeypatch, tmp_path):
+    """The thing standing between somebody and a game they own belongs at the
+    top of the list, not filed under the ones already sorted."""
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+    (tmp_path / "scph5501.bin").write_bytes(b"x" * 512)
+
+    needs = retroarch.bios_needs(library)
+    satisfied = [need.satisfied for need in needs]
+
+    assert satisfied == sorted(satisfied)          # unmet first
+    assert any(need.core == "swanstation" and need.satisfied for need in needs)
+
+
+def test_a_bios_file_is_copied_not_moved(monkeypatch, tmp_path):
+    """These are somebody's dumps of their own hardware. A tool that relocates
+    them out of wherever they keep their backups is a tool that loses them."""
+    system = tmp_path / "system"
+    source = tmp_path / "scph5501.bin"
+    source.write_bytes(b"x" * 512)
+
+    result = retroarch.install_bios([source], directory=system)
+
+    assert result.added == ["scph5501.bin"]
+    assert source.exists()
+    assert (system / "scph5501.bin").is_file()
+
+
+def test_the_filename_is_kept_exactly(tmp_path):
+    """Every emulator looks for firmware by a specific name; renaming one
+    guarantees it is never found."""
+    system = tmp_path / "system"
+    source = tmp_path / "SCPH5501.BIN"
+    source.write_bytes(b"x" * 512)
+
+    retroarch.install_bios([source], directory=system)
+
+    assert (system / "SCPH5501.BIN").is_file()
+
+
+def test_replacing_an_existing_file_is_reported_separately(tmp_path):
+    system = tmp_path / "system"
+    system.mkdir()
+    (system / "scph5501.bin").write_bytes(b"old")
+    source = tmp_path / "scph5501.bin"
+    source.write_bytes(b"new" * 200)
+
+    result = retroarch.install_bios([source], directory=system)
+
+    assert result.replaced == ["scph5501.bin"]
+    assert result.added == []
+
+
+def test_the_destination_is_created(tmp_path):
+    source = tmp_path / "dc_boot.bin"
+    source.write_bytes(b"x" * 512)
+
+    result = retroarch.install_bios([source], directory=tmp_path / "deep" / "system")
+
+    assert result.added
+
+
+def test_something_that_is_not_a_file_is_reported(tmp_path):
+    result = retroarch.install_bios([tmp_path / "nope.bin"], directory=tmp_path / "s")
+
+    assert result.errors
+    assert not result.added
+
+
+def test_one_bad_file_does_not_stop_the_others(tmp_path):
+    good = tmp_path / "scph5501.bin"
+    good.write_bytes(b"x" * 512)
+
+    result = retroarch.install_bios(
+        [tmp_path / "missing.bin", good], directory=tmp_path / "system"
+    )
+
+    assert result.added == ["scph5501.bin"]
+    assert len(result.errors) == 1
+
+
+def test_no_system_directory_is_explained_rather_than_crashed(monkeypatch, tmp_path):
+    monkeypatch.setattr(retroarch, "system_directory", lambda: None)
+    source = tmp_path / "scph5501.bin"
+    source.write_bytes(b"x" * 512)
+
+    result = retroarch.install_bios([source])
+
+    assert result.errors
+    assert "system directory" in result.summary

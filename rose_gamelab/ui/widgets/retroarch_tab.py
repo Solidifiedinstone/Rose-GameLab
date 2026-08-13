@@ -18,14 +18,19 @@ would make a working feature look broken.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -168,6 +173,8 @@ class RetroArchTab(QWidget):
         area.setWidget(self._list)
         layout.addWidget(area, 1)
 
+        layout.addWidget(self._build_bios())
+
         self.bar = QProgressBar()
         self.bar.hide()
         layout.addWidget(self.bar)
@@ -180,6 +187,111 @@ class RetroArchTab(QWidget):
         self.fetch_button = QPushButton("Install selected cores")
         self.fetch_button.clicked.connect(self.install_selected)
         layout.addWidget(self.fetch_button)
+
+    def _build_bios(self) -> QWidget:
+        """Firmware: what is wanted, what is missing, and how to add it."""
+        box = QFrame()
+        box.setStyleSheet(
+            f"background-color: {self.theme.panel};"
+            f"border-radius: {ui_theme.RADIUS_LARGE}px;"
+        )
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(
+            ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING
+        )
+        layout.setSpacing(6)
+
+        heading = QLabel("BIOS files")
+        heading.setStyleSheet(
+            f"color: {self.theme.text}; font-weight: 600; background: transparent;"
+        )
+        layout.addWidget(heading)
+
+        note = QLabel(
+            "Some systems will not start without the console's own firmware. "
+            "A core missing it does not say so politely — it fails to start, "
+            "which looks exactly like the emulator crashing. Add the files you "
+            "dumped from your own hardware; GameLab copies them where RetroArch "
+            "looks and never renames them."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(
+            f"color: {self.theme.text_dim}; font-size: 12px; background: transparent;"
+        )
+        layout.addWidget(note)
+
+        self.bios_list = QListWidget()
+        self.bios_list.setMaximumHeight(150)
+        self.bios_list.setStyleSheet(
+            f"background-color: {self.theme.surface}; color: {self.theme.text};"
+            f"border-radius: {ui_theme.RADIUS_LARGE}px; padding: 6px;"
+        )
+        layout.addWidget(self.bios_list)
+
+        row = QHBoxLayout()
+        self.bios_status = QLabel()
+        self.bios_status.setWordWrap(True)
+        self.bios_status.setStyleSheet(
+            f"color: {self.theme.text_dim}; font-size: 12px; background: transparent;"
+        )
+        row.addWidget(self.bios_status, 1)
+
+        add = QPushButton("Add BIOS files…")
+        add.clicked.connect(self.add_bios)
+        row.addWidget(add)
+
+        reveal = QPushButton("Open the folder")
+        reveal.clicked.connect(self.open_bios_folder)
+        row.addWidget(reveal)
+
+        layout.addLayout(row)
+        return box
+
+    def refresh_bios(self) -> None:
+        self.bios_list.clear()
+
+        for need in retroarch.bios_needs(self.library):
+            mark = "✓" if need.satisfied else "○"
+            item = QListWidgetItem(f"{mark}  {need.summary}")
+            if need.satisfied:
+                item.setForeground(QColor(self.theme.text_dim))
+            self.bios_list.addItem(item)
+
+        folder = retroarch.system_directory()
+        self.bios_status.setText(
+            f"They go in {folder}" if folder
+            else "RetroArch has no system directory yet — install it and run it once."
+        )
+
+    def add_bios(self) -> None:
+        folder = retroarch.system_directory()
+        if folder is None:
+            self.bios_status.setText(
+                "RetroArch has no system directory yet — install it and run it once."
+            )
+            return
+
+        chosen, _filter = QFileDialog.getOpenFileNames(
+            self, "Choose BIOS files", str(Path.home()),
+            "Firmware (*.bin *.BIN *.rom *.ROM *.pce *.img);;All files (*)",
+        )
+        if not chosen:
+            return
+
+        result = retroarch.install_bios(chosen)
+        self.bios_status.setText(f"{result.summary} — {folder}")
+        for error in result.errors[:3]:
+            logger.warning("BIOS: %s", error)
+
+        self.refresh_bios()
+        self._rebuild_list()          # the warnings on the cores change too
+
+    def open_bios_folder(self) -> None:
+        folder = retroarch.system_directory()
+        if folder is None:
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     # ── State ─────────────────────────────────────────────────────
 
@@ -209,6 +321,7 @@ class RetroArchTab(QWidget):
             self.install_button.setEnabled(retroarch.can_install_without_root())
 
         self._rebuild_list()
+        self.refresh_bios()
 
     def _rebuild_list(self) -> None:
         while self._list_layout.count():

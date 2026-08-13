@@ -124,7 +124,9 @@ stays.
 - **RetroArch, set up for you.** Settings → RetroArch installs it (through
   Flatpak, which needs no password) and lists every system with a tick box.
   Tick the consoles you own and GameLab fetches exactly those cores from the
-  libretro project — the systems you have games for are ticked already
+  libretro project — the systems you have games for are ticked already. The
+  same screen lists which systems need **BIOS files**, and copies the ones you
+  dumped from your own hardware into the folder RetroArch reads them from
 
 **Deliberately unfinished**
 
@@ -309,7 +311,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1303 tests, none of which touch the network or require a controller, an optical
+1321 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

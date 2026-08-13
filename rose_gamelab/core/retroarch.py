@@ -370,6 +370,129 @@ BIOS_REQUIRED: dict[str, tuple[str, ...]] = {
 }
 
 
+@dataclass(frozen=True)
+class BiosNeed:
+    """One core's firmware requirement, and whether it is met."""
+
+    core: str
+    systems: tuple[str, ...]
+    filenames: tuple[str, ...]
+    satisfied: bool
+
+    @property
+    def summary(self) -> str:
+        names = " or ".join(self.filenames)
+        return f"{', '.join(self.systems)} — {names}"
+
+
+def bios_needs(library=None) -> list[BiosNeed]:
+    """Firmware wanted by the cores worth caring about, most useful first.
+
+    Every core that needs firmware is listed, not only the installed ones: the
+    point is to be able to put the file in place *before* discovering a game
+    will not start, which is the whole reason this is hard to diagnose.
+    """
+    present = installed_cores()
+    counts: dict[str, int] = {}
+    if library is not None:
+        try:
+            counts = dict(library.systems_in_library())
+        except Exception:
+            logger.exception("could not count games per system")
+
+    # The core list is walked once and the sort keys built as we go: looking
+    # each core up again from inside a sort key turns this into a quadratic
+    # scan of the whole catalogue for no benefit.
+    ordered = []
+    for core in available_cores(library):
+        wanted = BIOS_REQUIRED.get(core.name)
+        if not wanted:
+            continue
+
+        owned = sum(counts.get(system_id, 0) for system_id in core.system_ids)
+        need = BiosNeed(
+            core=core.name,
+            systems=core.systems,
+            filenames=wanted,
+            satisfied=not missing_bios(core.name),
+        )
+        # Unsatisfied first, then whatever the user owns games for, so the
+        # thing standing between them and a game they have is at the top.
+        ordered.append(((need.satisfied, -owned, core.name not in present,
+                         core.systems[0]), need))
+
+    ordered.sort(key=lambda entry: entry[0])
+    return [need for _key, need in ordered]
+
+
+@dataclass
+class BiosInstallResult:
+    """What copying firmware in actually did."""
+
+    added: list[str] = field(default_factory=list)
+    replaced: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def summary(self) -> str:
+        if self.errors and not (self.added or self.replaced):
+            return "; ".join(self.errors)
+        parts = []
+        if self.added:
+            parts.append(f"{len(self.added)} added")
+        if self.replaced:
+            parts.append(f"{len(self.replaced)} replaced")
+        if self.errors:
+            parts.append(f"{len(self.errors)} failed")
+        return ", ".join(parts) or "nothing to do"
+
+
+def install_bios(paths, *, directory: Optional[Path] = None) -> BiosInstallResult:
+    """Copy firmware files into the directory RetroArch reads them from.
+
+    Copied, never moved: these are the user's dumps of their own hardware, and
+    a tool that relocates them out of wherever they keep their backups is a
+    tool that loses them.
+
+    Names are kept exactly as given. Every emulator that wants firmware looks
+    for it by a specific filename, so "helpfully" renaming anything here would
+    guarantee it is never found.
+    """
+    result = BiosInstallResult()
+
+    folder = Path(directory).expanduser() if directory else system_directory()
+    if folder is None:
+        result.errors.append(
+            "RetroArch has no system directory yet. Install it, run it once, "
+            "and try again."
+        )
+        return result
+
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        result.errors.append(f"Could not create {folder}: {exc}")
+        return result
+
+    for entry in paths:
+        source = Path(entry).expanduser()
+        if not source.is_file():
+            result.errors.append(f"{source.name}: not a file")
+            continue
+
+        target = folder / source.name
+        existed = target.exists()
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            result.errors.append(f"{source.name}: {exc}")
+            continue
+
+        (result.replaced if existed else result.added).append(source.name)
+
+    return result
+
+
 def missing_bios(core: str) -> tuple[str, ...]:
     """BIOS files a core needs and RetroArch cannot find. Empty when happy.
 
