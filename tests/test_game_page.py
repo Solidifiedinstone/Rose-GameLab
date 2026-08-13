@@ -308,8 +308,29 @@ def test_recently_played_is_most_recent_first(window, game):
     other = window.library.add_game(title="Older Game", system="snes")
     played(window, other, (9, 600))
     played(window, game, (1, 600))
+    # `played` stamps last_played with *now* for both, so on its own this asks
+    # for an order the data does not express. Given a real difference, the
+    # question has an answer.
+    window.db.execute(
+        "UPDATE games SET last_played = '2026-01-01T00:00:00+00:00' WHERE id = ?",
+        (other,),
+    )
 
     assert [g.id for g in window.library.recently_played()] == [game, other]
+
+
+def test_games_played_at_the_same_moment_keep_a_stable_order(window, game):
+    """Ties were ordered by whatever the query plan happened to do — adding an
+    index silently changed it. A shelf that reshuffles equal rows between
+    openings looks broken even though nothing changed."""
+    other = window.library.add_game(title="Same Second", system="snes")
+    played(window, other, (1, 600))
+    played(window, game, (1, 600))
+
+    first = [g.id for g in window.library.recently_played()]
+    second = [g.id for g in window.library.recently_played()]
+
+    assert first == second
 
 
 def test_never_played_games_are_not_in_the_shelf(window, game):

@@ -205,3 +205,61 @@ def test_two_pads_cannot_share_a_player_slot(tmp_path):
         )
 
     database.close()
+
+
+# ── Indexes ───────────────────────────────────────────────────────
+
+def index_names(conn) -> set[str]:
+    return {
+        row["name"] for row in
+        conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+
+
+def test_the_sort_indexes_arrive_in_the_upgrade(tmp_path):
+    path = tmp_path / "old.db"
+    conn = build_to_version(path, 4)
+    assert "idx_games_system_sort" not in index_names(conn)
+    conn.close()
+
+    database = Database(path)
+
+    assert "idx_games_system_sort" in index_names(database.conn)
+    database.close()
+
+
+def test_filtering_by_system_no_longer_needs_a_temporary_sort(tmp_path):
+    """The most common query in the application: the sidebar's system filter,
+    which Big Picture also runs once per system."""
+    database = Database(tmp_path / "plans.db")
+
+    plan = " ".join(
+        row["detail"] for row in database.query(
+            "EXPLAIN QUERY PLAN"
+            " SELECT * FROM games WHERE system = ? ORDER BY sort_title", ("snes",)
+        )
+    )
+
+    assert "idx_games_system_sort" in plan
+    assert "TEMP B-TREE" not in plan.upper()
+    database.close()
+
+
+def test_recently_played_and_added_are_indexed(tmp_path):
+    """Two of the six sort options, and the first two shelves in Big Picture."""
+    database = Database(tmp_path / "plans.db")
+
+    for column, index in (
+        ("last_played", "idx_games_last_played"),
+        ("added_at", "idx_games_added"),
+        ("play_seconds", "idx_games_playtime"),
+    ):
+        plan = " ".join(
+            row["detail"] for row in database.query(
+                f"EXPLAIN QUERY PLAN SELECT * FROM games ORDER BY {column} DESC"
+            )
+        )
+        assert index in plan, column
+        assert "TEMP B-TREE" not in plan.upper(), column
+
+    database.close()

@@ -222,7 +222,14 @@ class Library:
         if where:
             sql += " WHERE " + " AND ".join(where)
         # NULLS LAST so games never played sort after played ones, not before.
-        sql += f" ORDER BY {order} IS NULL, {order} {direction}"
+        #
+        # `g.id` last is not decoration. Every sort here has ties — two games
+        # added in the same second, two never played, two with no rating — and
+        # without a tiebreaker their relative order is whatever the query plan
+        # happens to produce. That is not stable: adding an index changed it,
+        # which is how this was noticed. A library that reshuffles equal rows
+        # between runs looks broken even though nothing changed.
+        sql += f" ORDER BY {order} IS NULL, {order} {direction}, g.id DESC"
 
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
@@ -664,7 +671,9 @@ class Library:
         """
         rows = self.db.query(
             "SELECT * FROM games WHERE hidden = 0 AND last_played IS NOT NULL"
-            " ORDER BY last_played DESC LIMIT ?",
+            # Tiebroken by id, so two games played in the same second keep a
+            # stable order instead of swapping places between openings.
+            " ORDER BY last_played DESC, id DESC LIMIT ?",
             (int(limit),),
         )
         return [Game.from_row(row) for row in rows]

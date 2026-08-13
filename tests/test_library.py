@@ -550,3 +550,29 @@ def test_removing_games_needs_a_filter(library):
         library.remove_games_where()
 
     assert library.count() == 1
+
+
+def test_sorting_is_stable_when_values_tie(library):
+    """Every sort here has ties — two games added in the same second, two never
+    played, two unrated. Without a tiebreaker their order is whatever the query
+    plan produces, which changed the day an index was added."""
+    for index in range(6):
+        library.add_game(title=f"Tied {index}", system="snes", path=f"/r/{index}.sfc")
+
+    for sort in ("title", "added", "last_played", "playtime", "release", "rating"):
+        first = [game.id for game in library.list_games(sort=sort)]
+        second = [game.id for game in library.list_games(sort=sort)]
+        assert first == second, sort
+
+
+def test_never_played_games_sort_after_played_ones(library):
+    played = library.add_game(title="Played", system="snes", path="/r/a.sfc")
+    library.add_game(title="Never", system="snes", path="/r/b.sfc")
+    library.db.execute(
+        "UPDATE games SET last_played = '2026-01-01T00:00:00+00:00' WHERE id = ?",
+        (played,),
+    )
+
+    order = [game.id for game in library.list_games(sort="last_played", descending=True)]
+
+    assert order[0] == played
