@@ -22,6 +22,18 @@ from typing import Iterable
 logger = logging.getLogger(__name__)
 
 
+def _label_for(game) -> str:
+    """What to call one way of playing, when an entry has several.
+
+    The system, because that is the difference a person is choosing between:
+    "PlayStation 2" and "PlayStation 3", not two identical game titles.
+    """
+    from rose_gamelab.core.emulator import get_system
+
+    system = get_system(game.system)
+    return system.name if system else (game.system or "Other")
+
+
 @dataclass
 class MergeResult:
     """What a merge moved."""
@@ -103,10 +115,16 @@ def merge_games(library, keep_id: int, merge_ids: Iterable[int]) -> MergeResult:
                 existing_paths.add(row["path"])
                 result.files += 1
 
+            # Stamped with the system they came from before they move, or a
+            # PS3 disc folded into a PS2 entry would be handed to PCSX2. The
+            # launcher reads this per option, not per game.
             moved = cur.execute(
-                "UPDATE launch_options SET game_id = ?, is_primary = 0"
+                "UPDATE launch_options"
+                "   SET game_id = ?, is_primary = 0,"
+                "       system = COALESCE(system, ?),"
+                "       label = COALESCE(label, ?)"
                 " WHERE game_id = ?",
-                (keep_id, loser_id),
+                (keep_id, loser.system, _label_for(loser), loser_id),
             ).rowcount
             result.launch_options += max(0, moved)
 

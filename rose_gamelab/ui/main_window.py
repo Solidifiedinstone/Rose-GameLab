@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QCursor, QKeySequence
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -987,6 +987,14 @@ class MainWindow(QMainWindow):
     # ── Launching ─────────────────────────────────────────────────
 
     def launch(self, game_id: int, option_id: Optional[int]) -> None:
+        # More than one way to play and nobody said which: ask. An entry can
+        # hold the same game on two consoles, or a ROM and a Steam copy, and
+        # picking one silently is picking wrong half the time.
+        if option_id is None:
+            option_id = self._choose_launch_option(game_id)
+            if option_id is False:
+                return          # asked, and the answer was "never mind"
+
         try:
             self.launcher.launch(
                 game_id,
@@ -1001,6 +1009,49 @@ class MainWindow(QMainWindow):
 
         game = self.library.get(game_id)
         self.status.setText(f"Playing {game.title}…" if game else "Playing…")
+
+    def _choose_launch_option(self, game_id: int):
+        """Which way to play. None when there is nothing to choose, False when
+        the user closed the question without answering.
+
+        Deliberately not a preference that gets remembered: somebody with a
+        game on two consoles wants the PS2 one sometimes and the PS3 one other
+        times, and a launcher that decides for them is a launcher they have to
+        fight.
+        """
+        options = self.library.launch_options_for(game_id)
+        if len(options) < 2:
+            return None
+
+        game = self.library.get(game_id)
+        menu = QMenu(self)
+        menu.setTitle("Play with")
+
+        for option in options:
+            label = option["label"] or option["emulator"] or option["kind"]
+            system = None
+            try:
+                system = option["system"]
+            except (IndexError, KeyError):
+                system = None
+            if system:
+                found = get_system(system)
+                label = found.name if found else system
+
+            action = menu.addAction(str(label))
+            action.setData(option["id"])
+
+        menu.addSeparator()
+        menu.addAction("Cancel").setData(None)
+
+        chosen = menu.exec(QCursor.pos())
+        if chosen is None or chosen.data() is None:
+            return False
+
+        logger.info(
+            "launching %s as %s", game.title if game else game_id, chosen.text()
+        )
+        return chosen.data()
 
     def _on_game_exit(self, game_id: int, seconds: int) -> None:
         game = self.library.get(game_id)

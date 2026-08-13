@@ -642,3 +642,17 @@ def test_unparseable_arguments_cost_the_arguments_not_the_launch(db):
     settings.set("ps2", extra_args='--broken "unclosed')
 
     assert settings.arguments_for("ps2") == []
+
+
+def test_a_launch_option_reaches_its_own_emulator(library, profiles, db):
+    """A merged entry holds one option per console. Resolving both against the
+    game's single system would hand a PS3 disc to the PS2 emulator."""
+    game_id = library.add_game(title="San Andreas", system="ps2", path="/roms/sa.iso")
+    library.add_launch_option(game_id, kind="emulator", target="/roms/sa.iso")
+    library.add_launch_option(
+        game_id, kind="emulator", target="/roms/sa/EBOOT.BIN", system="ps3"
+    )
+
+    options = library.launch_options_for(game_id)
+
+    assert {o["system"] for o in options} == {"ps2", "ps3"}

@@ -402,6 +402,23 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX idx_games_ra_checked ON games(ra_checked_at);
         """,
     ),
+    (
+        8,
+        "each way of launching a game knows which system it is for",
+        """
+        -- A game had one system and the launcher read the emulator from it,
+        -- which is fine until one entry can be started more than one way.
+        -- Somebody who owns San Andreas on PS2 and on PS3 wants one entry with
+        -- two ways to play; without this, both would be handed to whichever
+        -- emulator the game's own system named, and one of them would fail.
+        ALTER TABLE launch_options ADD COLUMN system TEXT;
+
+        -- Everything that exists today belongs to its game's system.
+        UPDATE launch_options
+           SET system = (SELECT system FROM games WHERE games.id = launch_options.game_id)
+         WHERE system IS NULL;
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)

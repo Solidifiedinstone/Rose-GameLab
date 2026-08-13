@@ -418,14 +418,26 @@ class Launcher:
                 profile.name, ", ".join(missing),
             )
 
+        # The launch option's own system, not the game's. A merged entry — the
+        # same game owned on two consoles — has an option per console, and
+        # resolving both against the game's single system would hand one of
+        # them to the wrong emulator.
+        # A plain lookup: sqlite3.Row has no `.get`, and `"system" in option`
+        # tests the row's *values* rather than its column names.
+        try:
+            system = option["system"]
+        except (IndexError, KeyError):
+            system = None
+        system = system or game.system
+
         emulator_path = (
-            self.resolve_emulator(game.system) if kind == "emulator" else None
+            self.resolve_emulator(system) if kind == "emulator" else None
         )
         # Fall back to a libretro core only when no standalone emulator is
         # installed — a standalone emulator is the better run of the two, and
         # is what detection already picked.
         core_path = (
-            self.resolve_core(game.system, search_default_dirs=emulator_path is None)
+            self.resolve_core(system, search_default_dirs=emulator_path is None)
             if kind == "emulator"
             else None
         )
@@ -437,9 +449,9 @@ class Launcher:
             emulator=option["emulator"],
             emulator_path=emulator_path,
             args=option["args"],
-            system=game.system,
+            system=system,
             system_args=(
-                self.system_settings.arguments_for(game.system)
+                self.system_settings.arguments_for(system)
                 if self.system_settings is not None else None
             ),
             retroarch_path=self.resolve_retroarch() if core_path else None,

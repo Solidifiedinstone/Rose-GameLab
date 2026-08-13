@@ -56,7 +56,9 @@ stays.
 - Import from emulators, ROM folders, Steam, GOG, Heroic, Lutris, or a custom source
 - Sources and systems appear in the sidebar as you add them
 - Duplicate detection — the same game owned on Steam *and* dumped as a ROM
-  becomes one entry with two ways to play, not two entries
+  becomes one entry with two ways to play, not two entries. Own it on two
+  consoles? `rose-gamelab merge` folds those together too, and selecting the
+  game asks which version you want; each one reaches its own emulator
 - Multi-disc games merge into a single entry with an auto-generated `.m3u`,
   so the emulator can swap discs without returning to the launcher
 
@@ -313,7 +315,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1330 tests, none of which touch the network or require a controller, an optical
+1336 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

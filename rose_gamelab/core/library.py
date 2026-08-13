@@ -397,11 +397,17 @@ class Library:
         working_dir: Optional[str] = None,
         profile_id: Optional[int] = None,
         is_primary: bool = False,
+        system: Optional[str] = None,
     ) -> int:
         """Add a way to launch a game.
 
         The first option added to a game becomes primary automatically, so a
         game always has something to launch even if nobody set a preference.
+
+        `system` is which console *this way* of playing is for. It matters once
+        one entry can be started more than one way: the same game owned on PS2
+        and on PS3 is one entry with two options, and each has to reach its own
+        emulator.
         """
         existing = self.db.query_one(
             "SELECT COUNT(*) AS n FROM launch_options WHERE game_id = ?", (game_id,)
@@ -416,14 +422,21 @@ class Library:
         cursor = self.db.execute(
             "INSERT INTO launch_options"
             " (game_id, kind, label, emulator, target, args, working_dir,"
-            "  profile_id, is_primary, sort_order)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "  profile_id, is_primary, sort_order, system)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 game_id, kind, label, emulator, target, args, working_dir,
                 profile_id, int(is_primary), existing["n"],
+                # Falls back to the game's own system, which is right for
+                # every game that is only playable one way.
+                system or self._system_of(game_id),
             ),
         )
         return int(cursor.lastrowid)
+
+    def _system_of(self, game_id: int) -> Optional[str]:
+        row = self.db.query_one("SELECT system FROM games WHERE id = ?", (game_id,))
+        return row["system"] if row else None
 
     def has_launch_option(self, game_id: int, kind: str, target: str) -> bool:
         return self.db.query_one(

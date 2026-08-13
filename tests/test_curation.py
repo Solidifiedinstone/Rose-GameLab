@@ -212,3 +212,41 @@ def test_a_retroachievements_link_is_inherited(library):
 
     row = library.db.query_one("SELECT ra_game_id FROM games WHERE id = ?", (keeper,))
     assert row["ra_game_id"] == 4242
+
+
+# ── Merging across systems ────────────────────────────────────────
+
+def test_each_way_of_playing_keeps_its_own_system(library):
+    """The same game owned on two consoles is one entry with two options, and
+    each has to reach its own emulator — the game has only one system field,
+    so without this both would be handed to whichever one survived."""
+    ps2 = library.add_game(title="San Andreas", system="ps2", path="/roms/sa.iso")
+    library.add_launch_option(ps2, kind="emulator", target="/roms/sa.iso")
+    ps3 = library.add_game(title="San Andreas", system="ps3", path="/roms/sa/EBOOT.BIN")
+    library.add_launch_option(ps3, kind="emulator", target="/roms/sa/EBOOT.BIN")
+
+    merge_games(library, ps2, [ps3])
+
+    systems = {o["system"] for o in library.launch_options_for(ps2)}
+    assert systems == {"ps2", "ps3"}
+
+
+def test_a_moved_option_is_labelled_with_its_console(library):
+    """That is the difference somebody is choosing between — not two identical
+    game titles."""
+    ps2 = library.add_game(title="San Andreas", system="ps2", path="/roms/sa.iso")
+    library.add_launch_option(ps2, kind="emulator", target="/roms/sa.iso")
+    ps3 = library.add_game(title="San Andreas", system="ps3", path="/roms/sa/EBOOT.BIN")
+    library.add_launch_option(ps3, kind="emulator", target="/roms/sa/EBOOT.BIN")
+
+    merge_games(library, ps2, [ps3])
+
+    labels = {o["label"] for o in library.launch_options_for(ps2)}
+    assert "PlayStation 3" in labels
+
+
+def test_an_option_defaults_to_its_games_system(library):
+    game_id = library.add_game(title="Solo", system="snes", path="/roms/s.sfc")
+    library.add_launch_option(game_id, kind="emulator", target="/roms/s.sfc")
+
+    assert library.launch_options_for(game_id)[0]["system"] == "snes"

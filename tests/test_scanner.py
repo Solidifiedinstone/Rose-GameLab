@@ -375,3 +375,34 @@ def test_a_folder_game_is_not_hashed(scanner, library, tmp_path):
     assert scanner.hash_pending() == 0
     (entry,) = library.list_games()
     assert library.files_for(entry.id)[0]["missing"] == 0
+
+
+def test_a_multi_disc_game_is_one_entry(tmp_path):
+    """Three discs are one game with three files, not three games. This is the
+    whole reason games and files are separate tables."""
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.core.scanner import RomScanner
+    from rose_gamelab.db.database import Database
+
+    folder = tmp_path / "roms"
+    folder.mkdir()
+    for disc in (1, 2, 3):
+        (folder / f"Final Fantasy VII (Disc {disc}).cue").write_text(
+            f'FILE "Final Fantasy VII (Disc {disc}).bin" BINARY\n'
+        )
+        (folder / f"Final Fantasy VII (Disc {disc}).bin").write_bytes(b"\x00" * 4096)
+
+    database = Database(tmp_path / "library.db")
+    library = Library(database)
+    RomScanner(library).scan_folder(str(folder), system="ps1", source_id="test")
+
+    games = library.list_games()
+    assert len(games) == 1
+    assert games[0].title == "Final Fantasy VII"
+
+    discs = database.query(
+        "SELECT disc_number FROM game_files WHERE game_id = ? ORDER BY disc_number",
+        (games[0].id,),
+    )
+    assert [row["disc_number"] for row in discs] == [1, 2, 3]
+    database.close()
