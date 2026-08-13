@@ -37,7 +37,10 @@ include = ["rose_gamelab*"]
 # working, but not what was promised, and invisible until someone plugs in a
 # SNES adapter.
 [tool.setuptools.package-data]
-rose_gamelab = ["data/*.txt", "data/*.LICENSE"]
+# Every data file, by extension. Listing them one type at a time is how the
+# achievement sound was left out of a wheel that installed and ran perfectly
+# and then never made a noise.
+rose_gamelab = ["data/*"]
 
 [tool.ruff]
 target-version = "py312"

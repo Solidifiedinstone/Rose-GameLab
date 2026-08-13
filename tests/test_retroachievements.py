@@ -806,3 +806,65 @@ def test_the_lookup_queue_is_limited(db, lib):
         lib.add_game(title=f"G{index}", system="snes", path=f"/r/{index}.sfc")
 
     assert len(games_needing_a_match(db, limit=25)) == 25
+
+
+# ── Noticing an unlock ────────────────────────────────────────────
+
+def test_an_achievement_earned_since_last_time_is_reported(db, lib):
+    """The emulator tells nobody, so the only evidence is a row that used to be
+    unearned and now is not."""
+    from rose_gamelab.metadata.retroachievements import (
+        Achievement,
+        newly_earned,
+        save_achievements,
+    )
+
+    game_id = lib.add_game(title="Super Metroid", system="snes", path="/r/sm.sfc")
+    before = [
+        Achievement(ra_id=1, title="First", description="", points=5,
+                    badge_url="", earned_at=None),
+        Achievement(ra_id=2, title="Second", description="", points=10,
+                    badge_url="", earned_at=None),
+    ]
+    save_achievements(db, game_id, before)
+
+    after = [
+        Achievement(ra_id=1, title="First", description="", points=5,
+                    badge_url="", earned_at="2026-08-13T12:00:00"),
+        Achievement(ra_id=2, title="Second", description="", points=10,
+                    badge_url="", earned_at=None),
+    ]
+
+    fresh = newly_earned(db, game_id, after)
+
+    assert [a.ra_id for a in fresh] == [1]
+
+
+def test_an_achievement_already_earned_is_not_reported_twice(db, lib):
+    from rose_gamelab.metadata.retroachievements import (
+        Achievement,
+        newly_earned,
+        save_achievements,
+    )
+
+    game_id = lib.add_game(title="G", system="snes", path="/r/g.sfc")
+    earned = [Achievement(ra_id=1, title="First", description="", points=5,
+                          badge_url="", earned_at="2026-01-01")]
+    save_achievements(db, game_id, earned)
+
+    assert newly_earned(db, game_id, earned) == []
+
+
+def test_a_first_ever_refresh_announces_nothing(db, lib):
+    """Otherwise the first refresh of a long-played game would announce fifty
+    unlocks from years ago."""
+    from rose_gamelab.metadata.retroachievements import Achievement, newly_earned
+
+    game_id = lib.add_game(title="Played For Years", system="snes", path="/r/g.sfc")
+    everything = [
+        Achievement(ra_id=index, title=f"A{index}", description="", points=5,
+                    badge_url="", earned_at="2024-01-01")
+        for index in range(50)
+    ]
+
+    assert newly_earned(db, game_id, everything) == []

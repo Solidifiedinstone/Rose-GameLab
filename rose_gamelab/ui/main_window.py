@@ -577,7 +577,38 @@ class MainWindow(QMainWindow):
         """Startup refresh: says nothing when there is nothing to say."""
         self.refresh_all_achievements(quietly=True)
 
-    def refresh_all_achievements(self, *, quietly: bool = False) -> None:
+    def announce_unlocks(self, unlocked) -> None:
+        """Show a notification for each achievement earned since last time.
+
+        Created on demand rather than kept around: most launches unlock
+        nothing, and a notifier that exists only when there is news cannot
+        accidentally show any.
+        """
+        if not unlocked:
+            return
+
+        from rose_gamelab.ui.achievement_toast import AchievementNotifier, Unlock
+
+        if getattr(self, "_notifier", None) is None:
+            self._notifier = AchievementNotifier(self.theme)
+
+        self._notifier.announce_all([
+            Unlock(
+                title=achievement.title,
+                description=achievement.description or "",
+                points=achievement.points,
+                game=game_title,
+            )
+            for game_title, achievement in unlocked
+        ])
+
+    def match_achievements_now(self) -> None:
+        """Asked for from Settings, so it explains itself if it cannot run."""
+        self.refresh_all_achievements(quietly=False, matching=True)
+
+    def refresh_all_achievements(
+        self, *, quietly: bool = False, matching: Optional[bool] = None
+    ) -> None:
         """Bring every already-linked game's achievement progress up to date.
 
         Only games that have been matched to RetroAchievements before are
@@ -611,14 +642,21 @@ class MainWindow(QMainWindow):
         # Games never looked up before. Anything already checked is excluded,
         # whether it matched or not, so a game RetroAchievements does not cover
         # is asked about exactly once in its life rather than on every launch.
-        unmatched = games_needing_a_match(self.db, limit=MATCHES_PER_LAUNCH)
+        unmatched = (
+            games_needing_a_match(self.db, limit=MATCHES_PER_LAUNCH)
+            if (matching if matching is not None
+                else self.preferences.achievements_match_on_start)
+            else []
+        )
 
         def work(report):
             from rose_gamelab.metadata.retroachievements import (
                 link_game,
+                newly_earned,
                 save_achievements,
             )
 
+            unlocked = []
             refreshed = 0
             for index, row in enumerate(linked, start=1):
                 report(f"Achievements: {row['title']} ({index} of {len(linked)})")
@@ -629,6 +667,11 @@ class MainWindow(QMainWindow):
                     # rate-limits itself, so a long library is slow, not fatal.
                     logger.exception("could not refresh achievements for %s", row["title"])
                     continue
+                # Worked out before saving: afterwards there is nothing left
+                # to compare against, and the unlock is the whole point.
+                for achievement in newly_earned(self.db, row["id"], found):
+                    unlocked.append((row["title"], achievement))
+
                 save_achievements(self.db, row["id"], found)
                 refreshed += 1
 
@@ -660,10 +703,11 @@ class MainWindow(QMainWindow):
                     logger.exception("could not fetch achievements for %s", row["title"])
                 matched += 1
 
-            return refreshed, matched, len(unmatched)
+            return refreshed, matched, len(unmatched), unlocked
 
         def done(counts):
-            refreshed, matched, checked = counts
+            refreshed, matched, checked, unlocked = counts
+            self.announce_unlocks(unlocked)
             parts = []
             if refreshed:
                 parts.append(f"progress for {refreshed} game(s)")
@@ -1245,6 +1289,7 @@ class MainWindow(QMainWindow):
         # theme_changed; connecting both would just repaint twice.
         dialog.appearance_changed.connect(self.apply_appearance)
         dialog.artwork_key_changed.connect(self._reload_artwork_key)
+        dialog.achievements_requested.connect(self.match_achievements_now)
         # Removing a source changes what the grid should be showing, so it is
         # redrawn immediately rather than staying stale until the next restart.
         dialog.sources_changed.connect(self.refresh)

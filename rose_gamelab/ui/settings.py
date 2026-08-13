@@ -60,6 +60,8 @@ class SettingsDialog(QDialog):
     sources_changed = Signal()
     #: The artwork key changed, so the scraper needs rebuilding with it.
     artwork_key_changed = Signal()
+    #: "Match now" was pressed; the main window owns the provider and threads.
+    achievements_requested = Signal()
 
     def __init__(
         self,
@@ -154,19 +156,8 @@ class SettingsDialog(QDialog):
         art_note.setWordWrap(True)
         layout.addWidget(art_note)
 
-        self.achievements_on_start = QCheckBox(
-            "Refresh RetroAchievements progress when GameLab opens"
-        )
-        self.achievements_on_start.setChecked(self.preferences.achievements_on_start)
-        self.achievements_on_start.toggled.connect(self._on_startup_changed)
-        layout.addWidget(self.achievements_on_start)
-
         achievements_note = QLabel(
-            "Achievements are earned in the emulator and nothing tells GameLab "
-            "when that happens, so without this the numbers are from whenever "
-            "you last opened that particular game. Only games already matched "
-            "to RetroAchievements are refreshed, and it does nothing at all "
-            "until you add your API key."
+            "Achievement settings live in the RetroAchievements tab."
         )
         achievements_note.setObjectName("Subtle")
         achievements_note.setWordWrap(True)
@@ -178,7 +169,6 @@ class SettingsDialog(QDialog):
     def _on_startup_changed(self) -> None:
         self.preferences.scan_on_start = self.scan_on_start.isChecked()
         self.preferences.art_on_start = self.art_on_start.isChecked()
-        self.preferences.achievements_on_start = self.achievements_on_start.isChecked()
         self.preferences.save()
 
     # ── Appearance ────────────────────────────────────────────────
@@ -491,12 +481,18 @@ class SettingsDialog(QDialog):
         self._show_ra_status()
         layout.addWidget(self.ra_status)
 
-        # Only these five have a hash algorithm verified against real dumps,
-        # and matching a game needs one. Said plainly rather than letting the
-        # user wonder why a PlayStation game never finds anything.
+        layout.addWidget(self._automatic_matching_box())
+
+        # Hashing is exact and is implemented for five systems; everything else
+        # RetroAchievements covers is matched by title instead. The old wording
+        # here said matching only worked for those five, which was wrong and
+        # would have told a PS2 owner not to bother.
         supported = QLabel(
-            "Matching works for NES, SNES, Game Boy, Game Boy Color and Mega "
-            "Drive. Other systems hash differently and are not implemented yet."
+            "Games are matched by content hash for NES, SNES, Game Boy, Game "
+            "Boy Color and Mega Drive — exact, down to the dump. Everything "
+            "else RetroAchievements supports, PlayStation and PS2 among them, "
+            "is matched by title instead, and a near miss is refused rather "
+            "than guessed at."
         )
         supported.setWordWrap(True)
         supported.setObjectName("Subtle")
@@ -504,6 +500,109 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _automatic_matching_box(self) -> QWidget:
+        """Everything about doing this without being asked."""
+        box = QFrame()
+        box.setObjectName("Card")
+        layout = QVBoxLayout(box)
+        layout.setSpacing(8)
+
+        heading = QLabel("Automatically")
+        heading.setStyleSheet("font-weight: 600;")
+        layout.addWidget(heading)
+
+        self.achievements_on_start = QCheckBox(
+            "Refresh my progress when GameLab opens"
+        )
+        self.achievements_on_start.setChecked(self.preferences.achievements_on_start)
+        self.achievements_on_start.toggled.connect(self._on_achievements_changed)
+        layout.addWidget(self.achievements_on_start)
+
+        progress_note = QLabel(
+            "Achievements are earned inside the emulator and nothing tells "
+            "GameLab when it happens, so without this the numbers are from "
+            "whenever you last opened that game."
+        )
+        progress_note.setObjectName("Subtle")
+        progress_note.setWordWrap(True)
+        layout.addWidget(progress_note)
+
+        self.achievements_match_on_start = QCheckBox(
+            "Look up games I have not checked yet, when GameLab opens"
+        )
+        self.achievements_match_on_start.setChecked(
+            self.preferences.achievements_match_on_start
+        )
+        self.achievements_match_on_start.toggled.connect(self._on_achievements_changed)
+        layout.addWidget(self.achievements_match_on_start)
+
+        match_note = QLabel(
+            "Games added later are matched without you opening them. A game "
+            "found to have no achievement set is remembered, so it is never "
+            "looked up twice — which is what stops this becoming a search for "
+            "your whole library every time."
+        )
+        match_note.setObjectName("Subtle")
+        match_note.setWordWrap(True)
+        layout.addWidget(match_note)
+
+        self.ra_counts = QLabel()
+        self.ra_counts.setWordWrap(True)
+        layout.addWidget(self.ra_counts)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+
+        match_now = QPushButton("Match now")
+        match_now.clicked.connect(self._match_achievements_now)
+        row.addWidget(match_now)
+
+        retry = QPushButton("Try the unmatched ones again")
+        retry.clicked.connect(self._retry_unmatched)
+        row.addWidget(retry)
+
+        layout.addLayout(row)
+        self._refresh_ra_counts()
+        return box
+
+    def _refresh_ra_counts(self) -> None:
+        """Say where the library stands, so "nothing happened" is answerable."""
+        linked = self.library.db.query_one(
+            "SELECT COUNT(*) AS n FROM games WHERE ra_game_id IS NOT NULL"
+        )["n"]
+        nothing = self.library.db.query_one(
+            "SELECT COUNT(*) AS n FROM games"
+            " WHERE ra_game_id IS NULL AND ra_checked_at IS NOT NULL"
+        )["n"]
+        waiting = self.library.db.query_one(
+            "SELECT COUNT(*) AS n FROM games"
+            " WHERE ra_game_id IS NULL AND ra_checked_at IS NULL AND hidden = 0"
+        )["n"]
+
+        self.ra_counts.setText(
+            f"{linked} game(s) matched  ·  {nothing} checked with no set  ·  "
+            f"{waiting} not looked at yet"
+        )
+
+    def _on_achievements_changed(self) -> None:
+        self.preferences.achievements_on_start = self.achievements_on_start.isChecked()
+        self.preferences.achievements_match_on_start = (
+            self.achievements_match_on_start.isChecked()
+        )
+        self.preferences.save()
+
+    def _match_achievements_now(self) -> None:
+        self.achievements_requested.emit()
+        self.accept()
+
+    def _retry_unmatched(self) -> None:
+        """Forget every "no set here" answer so they are all tried again."""
+        self.library.db.execute(
+            "UPDATE games SET ra_checked_at = NULL"
+            " WHERE ra_game_id IS NULL AND ra_checked_at IS NOT NULL"
+        )
+        self._refresh_ra_counts()
 
     def _show_ra_status(self) -> None:
         user, key = retroachievements_credentials()

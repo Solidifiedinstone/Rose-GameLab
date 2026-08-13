@@ -688,6 +688,35 @@ def games_needing_a_match(db, *, limit: Optional[int] = None) -> list:
     return db.query(sql)
 
 
+def newly_earned(db, game_id: int, achievements: Iterable[Achievement]) -> list[Achievement]:
+    """Achievements earned since the last time these were stored.
+
+    Worked out before saving, by comparing against what is already recorded.
+    This is what makes an unlock announceable: the emulator tells nobody, so
+    the only evidence GameLab ever gets is a row that used to be unearned and
+    now is not.
+
+    A game with nothing stored yet returns nothing, however many are earned.
+    The first refresh of a long-played game would otherwise announce fifty
+    unlocks from years ago.
+    """
+    known = {
+        row["ra_id"]: row["earned_at"]
+        for row in db.query(
+            "SELECT ra_id, earned_at FROM achievements WHERE game_id = ?", (game_id,)
+        )
+    }
+    if not known:
+        return []
+
+    return [
+        achievement for achievement in achievements
+        if achievement.earned
+        and achievement.ra_id in known
+        and not known[achievement.ra_id]
+    ]
+
+
 def save_achievements(db, game_id: int, achievements: Iterable[Achievement]) -> int:
     """Replace the stored achievements for one game. Returns the row count.
 

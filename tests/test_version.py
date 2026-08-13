@@ -78,3 +78,23 @@ def test_no_provider_hardcodes_a_version():
         and path.name != "base.py"
     ]
     assert offenders == []
+
+
+def test_every_data_file_ships_with_the_package():
+    """The controller database and the unlock sound are both useless if they
+    are not installed. The sound was left out of a wheel that installed and ran
+    perfectly and then simply never made a noise."""
+    import tomllib
+    from pathlib import Path
+
+    package = Path(__file__).resolve().parent.parent / "rose_gamelab"
+    on_disk = {path.name for path in (package / "data").iterdir() if path.is_file()}
+
+    with (Path(__file__).resolve().parent.parent / "pyproject.toml").open("rb") as handle:
+        patterns = tomllib.load(handle)["tool"]["setuptools"]["package-data"]["rose_gamelab"]
+
+    covered = set()
+    for pattern in patterns:
+        covered |= {path.name for path in package.glob(pattern) if path.is_file()}
+
+    assert on_disk - covered == set(), "some data files would not be installed"

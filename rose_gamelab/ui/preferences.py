@@ -191,6 +191,12 @@ class Preferences:
     #: without credentials, so it is on by default and simply stays quiet for
     #: everyone who has not set them.
     achievements_on_start: bool = True
+    #: Look up games never checked before, so achievements appear for games
+    #: added since without anybody opening them. Separate from the refresh
+    #: above because they cost different things: refreshing progress is one
+    #: cheap call per matched game, while matching is a hash or a rate-limited
+    #: search per game that has never been looked at.
+    achievements_match_on_start: bool = True
 
     # ── Appearance ────────────────────────────────────────────────
 
@@ -237,6 +243,7 @@ class Preferences:
             "scan_on_start": self.scan_on_start,
             "art_on_start": self.art_on_start,
             "achievements_on_start": self.achievements_on_start,
+            "achievements_match_on_start": self.achievements_match_on_start,
         }
 
     @classmethod
@@ -256,7 +263,10 @@ class Preferences:
             style=style if style in STYLES else DEFAULT_STYLE,
         )
 
-        for name in ("scan_on_start", "art_on_start", "achievements_on_start"):
+        for name in (
+            "scan_on_start", "art_on_start",
+            "achievements_on_start", "achievements_match_on_start",
+        ):
             if name in data:
                 setattr(prefs, name, bool(data[name]))
 
