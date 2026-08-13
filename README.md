@@ -29,20 +29,6 @@ open-source alternatives to big-tech applications.
 > has had limited real-world use. Features below are marked with what actually
 > works today — nothing here is a placeholder pretending to be finished.
 
-## ⚠️ Vibecoders begone
-
-Yes, this is a vibecoded project. I'm new to programming and still learning
-Python - I couldn't have written all of this myself yet, so I leaned on my Local LLM
-for assistance to get a working prototype off the ground. This is a starting
-point, not a finished, "proper" codebase.
-
-**From here on, I want contributions to be human-written.** If you have
-ideas, feature requests, or bug reports, please open an
-[Issue](https://github.com/Solidifiedinstone/Rose-GameLab/issues) instead of
-sending an AI-generated PR. My goal is to actually learn and own this
-codebase as I keep improving at Python, and eventually replace all of it
-with code written by hand - mine or a human contributor's.
-
 ## Expect bugs
 
 This is early software and it will break on things I have not seen. My own
