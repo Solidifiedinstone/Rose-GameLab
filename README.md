@@ -60,7 +60,9 @@ stays.
   consoles? `rose-gamelab merge` folds those together too, and selecting the
   game asks which version you want; each one reaches its own emulator
 - Multi-disc games merge into a single entry with an auto-generated `.m3u`,
-  so the emulator can swap discs without returning to the launcher
+  so the emulator can swap discs without returning to the launcher — whether
+  the discs are named `(Disc 1)`, `CD1`, `(D1)`, `(Part 1)`, or sit in their
+  own `Disc 1/` folders
 
 **Knowing what your games are**
 - Games identified by content hash rather than filename, so renaming a ROM
@@ -315,7 +317,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1336 tests, none of which touch the network or require a controller, an optical
+1350 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

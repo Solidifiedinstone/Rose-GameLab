@@ -205,3 +205,82 @@ def test_playlist_name_is_filesystem_safe(tmp_path):
     playlist = write_m3u(GameGroup(title="Ratchet: Up/Down", files=files), tmp_path)
     assert "/" not in playlist.name
     assert ":" not in playlist.name
+
+
+# ── Layouts that were being split ─────────────────────────────────
+#
+# Reported as "multi disc games show as multiple games". The common naming
+# worked; these did not.
+
+def test_discs_in_their_own_folders_are_one_game():
+    """Game/Disc 1/game.cue is how a great many PlayStation rips are laid out.
+    Grouping keys on the containing directory, and each disc has a different
+    one, so every disc looked like a separate game."""
+    paths = [
+        Path(f"/roms/Final Fantasy VII/Disc {n}/Final Fantasy VII.cue")
+        for n in (1, 2, 3)
+    ]
+
+    groups = group_discs(paths)
+
+    assert len(groups) == 1
+    assert groups[0].title == "Final Fantasy VII"
+    assert [f.disc_number for f in groups[0].sorted_files] == [1, 2, 3]
+
+
+def test_a_disc_folder_named_only_cd1_works_too():
+    paths = [Path(f"/roms/Metal Gear Solid/CD{n}/track.bin") for n in (1, 2)]
+
+    groups = group_discs(paths)
+
+    assert len(groups) == 1
+    assert groups[0].title == "Metal Gear Solid"
+
+
+def test_the_title_can_live_on_the_disc_folder():
+    """Game (Disc 1)/data.bin puts the name on the disc folder instead."""
+    paths = [Path(f"/roms/Chrono Cross (Disc {n})/data.bin") for n in (1, 2)]
+
+    groups = group_discs(paths)
+
+    assert len(groups) == 1
+    assert groups[0].title == "Chrono Cross"
+
+
+def test_two_games_with_disc_folders_do_not_merge(tmp_path):
+    """The folder above the disc folders is what they must share."""
+    paths = [
+        Path("/roms/Final Fantasy VII/Disc 1/game.cue"),
+        Path("/roms/Final Fantasy VII/Disc 2/game.cue"),
+        Path("/roms/Metal Gear Solid/Disc 1/game.cue"),
+    ]
+
+    titles = sorted(group.title for group in group_discs(paths))
+
+    assert titles == ["Final Fantasy VII", "Metal Gear Solid"]
+
+
+@pytest.mark.parametrize("filename,expected", [
+    ("Game (D1).cue", 1),
+    ("Game [D2].cue", 2),
+    ("Game (Part 1).cue", 1),
+    ("Game (Disque 1).cue", 1),
+    ("Game (Disco 2).cue", 2),
+    ("Game.d1.cue", 1),
+])
+def test_other_ways_people_name_discs(filename, expected):
+    _base, number, _label = parse_disc_number(filename)
+    assert number == expected
+
+
+@pytest.mark.parametrize("filename", [
+    "Disc Jockey.cue",          # a game whose name begins with the word
+    "D1 Grand Prix.cue",        # unbracketed abbreviation inside a real title
+    "Tekken 3.cue",
+    "Rocket League.cue",
+])
+def test_titles_that_only_look_like_disc_markers(filename):
+    """Matching an unbracketed abbreviation inside a title would merge
+    unrelated games, which is worse than missing one."""
+    _base, number, _label = parse_disc_number(filename)
+    assert number is None

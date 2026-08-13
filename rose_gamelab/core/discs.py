@@ -31,8 +31,30 @@ from typing import Iterable, Optional
 #   Grandia (USA) (Disc A).cue                <- lettered discs
 #   Game.cd1.chd
 _DISC_PATTERNS = [
-    re.compile(r"[\(\[]\s*(?:disc|disk|cd|dvd)\s*(?P<num>\d+|[a-z])\s*(?:of\s*\d+\s*)?[\)\]]", re.I),
-    re.compile(r"[\s._-]+(?:disc|disk|cd|dvd)[\s._-]*(?P<num>\d+)(?=[\s._\-\)\]]|$)", re.I),
+    # Bracketed, which is how nearly every dump is named. "part" and the
+    # non-English spellings are here because a rip made by a French or Spanish
+    # release group is still a multi-disc game.
+    re.compile(
+        r"[\(\[]\s*(?:disc|disk|disque|disco|disque|cd|dvd|part)\s*"
+        r"(?P<num>\d+|[a-z])\s*(?:of\s*\d+\s*)?[\)\]]",
+        re.I,
+    ),
+    # The abbreviation, bracketed only. Unbracketed "d1" appears inside real
+    # titles — D1 Grand Prix, R-Type Delta d1 — and matching it there would
+    # merge unrelated games, which is worse than missing one.
+    re.compile(r"[\(\[]\s*d\s*(?P<num>\d+)\s*[\)\]]", re.I),
+    re.compile(r"[\s._-]+(?:disc|disk|disque|disco|cd|dvd)[\s._-]*(?P<num>\d+)(?=[\s._\-\)\]]|$)", re.I),
+    # Dot- or underscore-delimited abbreviation: "Game.d1.cue". Both sides
+    # must be a separator, so a title ending in "d" plus a number is safe.
+    re.compile(r"[._-]d(?P<num>\d+)(?=[\s._\-\)\]]|$)", re.I),
+    # The whole string is the marker and nothing else, which is what a folder
+    # named "Disc 1" looks like. Anchored at both ends so it can never match
+    # inside a title — every other pattern here needs a separator or a bracket
+    # before the word, and a name that *starts* with "Disc" has neither.
+    re.compile(
+        r"^\s*(?:disc|disk|disque|disco|cd|dvd|part)[\s._-]*(?P<num>\d+|[a-z])\s*$",
+        re.I,
+    ),
 ]
 
 # Files that are part of a disc image but are not themselves the entry point.
@@ -171,11 +193,29 @@ def group_discs(paths: Iterable[Path]) -> list[GameGroup]:
 
     for path in filter_redundant_tracks(paths):
         base, disc_number, disc_label = parse_disc_number(path.stem)
+        folder = path.parent
+
+        if disc_number is None:
+            # The disc marker may be on the folder rather than the file: a rip
+            # laid out as Game/Disc 1/game.cue is extremely common, and every
+            # disc of it looked like a separate game because grouping keys on
+            # the containing directory and each disc has its own.
+            folder_base, folder_disc, folder_label = parse_disc_number(folder.name)
+            if folder_disc is not None:
+                disc_number, disc_label = folder_disc, folder_label
+                # Group by the folder ABOVE the disc folders, which is the one
+                # thing all the discs of one game share.
+                folder = folder.parent
+                # And take the title from whichever of them actually carries
+                # it: "Game (Disc 1)/…" has it on the disc folder, while
+                # "Game/Disc 1/…" has it on the one above.
+                base = folder_base or folder.name or base
+
         title = normalise_title(base)
         if not title:
             title = path.stem
 
-        key = (path.parent, sort_title(title))
+        key = (folder, sort_title(title))
 
         group = groups.get(key)
         if group is None:
