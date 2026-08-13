@@ -110,11 +110,71 @@ def is_flatpak() -> bool:
     return FLATPAK_ID in emulator_detect.installed_flatpaks()
 
 
+#: Where a user-scope flathub remote is added from, when one is missing.
+FLATHUB_REPO = "https://dl.flathub.org/repo/flathub.flatpakrepo"
+
+
+def _run(command: list[str], *, timeout: int = 60):
+    """Run a command, returning None instead of raising."""
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("could not run %s: %s", command[0], exc)
+        return None
+
+
+def flatpak_remotes() -> dict[str, str]:
+    """Configured remotes, mapped to 'user' or 'system'.
+
+    The scope matters more than it looks. A system remote installs system-wide,
+    which needs authentication through polkit — and a game launcher that
+    triggers a password prompt from a settings screen, while blocking, is
+    indistinguishable from one that has frozen.
+    """
+    result = _run(["flatpak", "remotes", "--columns=name,options"], timeout=20)
+    if result is None or result.returncode != 0:
+        return {}
+
+    remotes: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        options = " ".join(parts[1:]).lower()
+        remotes[parts[0]] = "user" if "user" in options else "system"
+    return remotes
+
+
+def has_user_flathub() -> bool:
+    return flatpak_remotes().get("flathub") == "user"
+
+
+def ensure_user_flathub() -> bool:
+    """Add flathub for this user if it is missing. Needs no authentication.
+
+    A system-only flathub — which is what a distribution's flatpak package
+    usually sets up — cannot serve a `--user` install at all: it fails with
+    "no remote refs found". Adding the same remote at user scope is free, needs
+    no password, and leaves the system one alone.
+    """
+    if has_user_flathub():
+        return True
+
+    result = _run(
+        ["flatpak", "remote-add", "--user", "--if-not-exists", "flathub", FLATHUB_REPO],
+        timeout=60,
+    )
+    return result is not None and result.returncode == 0
+
+
 def can_install_without_root() -> bool:
     """Whether GameLab can genuinely install RetroArch itself.
 
-    Only through Flatpak. Everything else needs a package manager, which needs
-    root, which a game launcher has no business asking for.
+    Only through a *user-scope* Flatpak install. Everything else — a system
+    Flatpak, a package manager — needs authentication, and a game launcher
+    has no business asking for a password.
     """
     return shutil.which("flatpak") is not None
 
@@ -148,21 +208,52 @@ def install_retroarch(
         )
 
     if progress:
-        progress("Installing RetroArch through Flatpak…")
+        progress("Adding the Flathub repository for your user…")
 
-    try:
-        result = subprocess.run(
-            ["flatpak", "install", "-y", "flathub", FLATPAK_ID],
-            capture_output=True, text=True, timeout=900, check=False,
+    if not ensure_user_flathub():
+        return False, (
+            "Flathub is only set up system-wide here, and adding it for your "
+            "user failed. Install RetroArch yourself with:\n\n    "
+            f"flatpak install flathub {FLATPAK_ID}"
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"Could not run flatpak: {exc}"
+
+    if progress:
+        progress("Downloading RetroArch… this takes a few minutes.")
+
+    # --user so no authentication is ever required, and --noninteractive so a
+    # question flatpak cannot ask makes it exit rather than wait forever for an
+    # answer that is never coming.
+    result = _run(
+        [
+            "flatpak", "install", "--user", "--noninteractive",
+            "flathub", FLATPAK_ID,
+        ],
+        timeout=1800,
+    )
 
     emulator_detect.refresh()
 
+    if result is None:
+        return False, (
+            "Flatpak could not be run, or took too long. Install RetroArch "
+            f"yourself with:\n\n    flatpak install flathub {FLATPAK_ID}"
+        )
+
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip().splitlines()
-        return False, "Flatpak refused: " + (detail[-1] if detail else "unknown error")
+        detail = [
+            line for line in
+            (result.stderr or result.stdout or "").strip().splitlines()
+            if line.strip()
+        ]
+        return False, (
+            "Flatpak refused: " + (detail[-1] if detail else "unknown error")
+        )
+
+    if not installed():
+        return False, (
+            "Flatpak reported success but RetroArch still cannot be found. "
+            "Try running it once from your applications menu."
+        )
 
     return True, "RetroArch installed."
 

@@ -310,3 +310,85 @@ def test_no_directory_is_invented_unless_asked(monkeypatch, tmp_path):
 
     assert retroarch.core_directory() is None
     assert retroarch.core_directory(create=True) is not None
+
+
+# ── Not freezing the application ──────────────────────────────────
+
+def test_a_user_scope_install_is_used(monkeypatch):
+    """A system-scope install needs authentication through polkit, and a
+    launcher that blocks on a password prompt is indistinguishable from one
+    that has crashed."""
+    commands = []
+
+    def record(command, **kwargs):
+        commands.append(command)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(retroarch.subprocess, "run", record)
+    monkeypatch.setattr(retroarch, "installed", lambda: False)
+    monkeypatch.setattr(retroarch, "has_user_flathub", lambda: True)
+
+    retroarch.install_retroarch()
+
+    install = next(c for c in commands if "install" in c)
+    assert "--user" in install
+    assert "--noninteractive" in install
+    assert "-y" not in install       # superseded by --noninteractive
+
+
+def test_a_system_only_flathub_gets_a_user_remote_added(monkeypatch):
+    """A distribution's flatpak package sets up flathub system-wide, and a
+    --user install against it fails with "no remote refs found"."""
+    commands = []
+
+    def record(command, **kwargs):
+        commands.append(command)
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(retroarch.subprocess, "run", record)
+    monkeypatch.setattr(retroarch, "installed", lambda: False)
+    monkeypatch.setattr(retroarch, "flatpak_remotes", lambda: {"flathub": "system"})
+
+    retroarch.install_retroarch()
+
+    assert any("remote-add" in c and "--user" in c for c in commands)
+
+
+def test_remote_scopes_are_read(monkeypatch):
+    output = "flathub\tsystem\nflathub-user\tuser\n"
+    monkeypatch.setattr(
+        retroarch, "_run",
+        lambda command, timeout=None: type(
+            "R", (), {"returncode": 0, "stdout": output, "stderr": ""}
+        )(),
+    )
+
+    assert retroarch.flatpak_remotes() == {
+        "flathub": "system", "flathub-user": "user",
+    }
+
+
+def test_a_failed_remote_add_gives_the_command_instead_of_hanging(monkeypatch):
+    monkeypatch.setattr(retroarch, "installed", lambda: False)
+    monkeypatch.setattr(retroarch, "ensure_user_flathub", lambda: False)
+
+    succeeded, message = retroarch.install_retroarch()
+
+    assert not succeeded
+    assert "flatpak install flathub" in message
+
+
+def test_flatpak_reporting_success_without_installing_is_not_believed(monkeypatch):
+    monkeypatch.setattr(retroarch, "installed", lambda: False)
+    monkeypatch.setattr(retroarch, "ensure_user_flathub", lambda: True)
+    monkeypatch.setattr(
+        retroarch, "_run",
+        lambda command, timeout=None: type(
+            "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
+        )(),
+    )
+
+    succeeded, message = retroarch.install_retroarch()
+
+    assert not succeeded
+    assert "still cannot be found" in message

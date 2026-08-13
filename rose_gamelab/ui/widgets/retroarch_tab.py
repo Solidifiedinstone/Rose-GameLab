@@ -40,6 +40,28 @@ from rose_gamelab.ui.theme import Theme
 logger = logging.getLogger(__name__)
 
 
+class RetroArchInstaller(QObject):
+    """Installs RetroArch off the interface thread.
+
+    It downloads a few hundred megabytes and may take minutes. Running that on
+    the interface thread froze the entire application for the duration — which
+    is not distinguishable, from the outside, from having crashed.
+    """
+
+    progress = Signal(str)
+    finished = Signal(bool, str)
+
+    def run(self) -> None:
+        try:
+            succeeded, message = retroarch.install_retroarch(
+                progress=self.progress.emit
+            )
+        except Exception as exc:
+            logger.exception("installing RetroArch failed")
+            succeeded, message = False, str(exc)
+        self.finished.emit(succeeded, message)
+
+
 class CoreInstaller(QObject):
     """Downloads cores off the interface thread."""
 
@@ -73,6 +95,8 @@ class RetroArchTab(QWidget):
         self._boxes: dict[str, QCheckBox] = {}
         self._thread: Optional[QThread] = None
         self._worker: Optional[CoreInstaller] = None
+        self._install_thread: Optional[QThread] = None
+        self._installer: Optional[RetroArchInstaller] = None
 
         self._build()
         self.refresh()
@@ -238,15 +262,41 @@ class RetroArchTab(QWidget):
     # ── Actions ───────────────────────────────────────────────────
 
     def install_retroarch(self) -> None:
+        if self._install_thread is not None:
+            return
+
         self.install_button.setEnabled(False)
         self.status.setText("Installing RetroArch…")
+        self.bar.setRange(0, 0)          # indeterminate: flatpak reports no total
+        self.bar.show()
 
-        succeeded, message = retroarch.install_retroarch()
+        self._install_thread = QThread(self)
+        self._installer = RetroArchInstaller()
+        self._installer.moveToThread(self._install_thread)
 
-        self.status.setText(message)
+        self._install_thread.started.connect(self._installer.run)
+        self._installer.progress.connect(
+            self.status.setText, Qt.ConnectionType.QueuedConnection
+        )
+        self._installer.finished.connect(
+            self._on_retroarch_installed, Qt.ConnectionType.QueuedConnection
+        )
+        self._install_thread.start()
+
+    def _on_retroarch_installed(self, succeeded: bool, message: str) -> None:
+        self.bar.hide()
+        self.bar.setRange(0, 1)
+
+        if self._install_thread is not None:
+            self._install_thread.quit()
+            self._install_thread.wait()
+            self._install_thread = None
+            self._installer = None
+
         if succeeded:
             self.refresh()
         else:
+            self.status.setText(message)
             self.install_button.setEnabled(True)
 
     def install_selected(self) -> None:

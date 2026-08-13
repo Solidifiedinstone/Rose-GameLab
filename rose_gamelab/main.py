@@ -452,9 +452,23 @@ def doctor(ctx: click.Context) -> None:
         console.print("  [dim]nothing connected[/]")
 
     # ── Optional tools ────────────────────────────────────────────
+    # RetroArch is asked about properly rather than looked for on PATH: a
+    # Flatpak install puts nothing there, so `which` reported it missing on a
+    # machine where it was installed and working.
+    retroarch_command = emulator_detect.retroarch_command()
+    console.print(
+        "\n[bold]RetroArch[/] — "
+        + ("[green]" + " ".join(retroarch_command) + "[/]" if retroarch_command
+           else "[dim]not installed[/]")
+    )
+    if retroarch_command:
+        from rose_gamelab.core import retroarch as retroarch_module
+
+        cores = retroarch_module.installed_cores()
+        console.print(f"  {len(cores)} core(s) installed")
+
     console.print("\n[bold]Optional tools[/]")
     for tool, what in (
-        ("retroarch", "libretro cores"),
         ("grim", "screenshots (Wayland)"),
         ("spectacle", "screenshots (KDE)"),
         ("maim", "screenshots (X11)"),
