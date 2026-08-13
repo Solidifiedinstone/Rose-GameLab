@@ -421,6 +421,12 @@ def test_the_launch_refresh_only_touches_linked_games(window, game, monkeypatch)
     unlinked = window.library.add_game(title="Never Matched", system="snes")
     window.db.execute("UPDATE games SET ra_game_id = 4242 WHERE id = ?", (game,))
     monkeypatch.setattr(window, "_achievements_provider", FakeProvider)
+    # The refresh also looks up never-checked games. That is a separate pass
+    # with its own test; pinning it empty keeps this one about progress alone,
+    # and keeps it quick enough not to outlive its own deadline.
+    monkeypatch.setattr(
+        "rose_gamelab.ui.main_window.games_needing_a_match", lambda *a, **k: []
+    )
 
     window.refresh_all_achievements(quietly=True)
 
@@ -470,3 +476,39 @@ def test_asking_for_it_by_hand_does_explain_the_missing_key(window, monkeypatch)
     window.refresh_all_achievements(quietly=False)
 
     assert shown
+
+
+def test_never_checked_games_are_looked_up_on_launch(window, monkeypatch):
+    """New games get matched without anybody opening them, and a game with no
+    achievement set is recorded so it is never looked up again."""
+    from rose_gamelab.metadata.retroachievements import games_needing_a_match
+
+    class FakeProvider:
+        def available(self):
+            return True
+
+        def achievements(self, ra_game_id, user=None):
+            return []
+
+    has_a_set = window.library.add_game(title="Known Game", system="snes")
+    nothing_there = window.library.add_game(title="Homebrew", system="snes")
+
+    monkeypatch.setattr(window, "_achievements_provider", FakeProvider)
+    monkeypatch.setattr(
+        window, "_match_retroachievements",
+        lambda game: 4242 if game.id == has_a_set else None,
+    )
+
+    window.refresh_all_achievements(quietly=True)
+
+    import time
+    deadline = time.monotonic() + 10
+    while window._thread is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+
+    # Both were checked, so neither is asked about again.
+    assert games_needing_a_match(window.db) == []
+    row = window.db.query_one(
+        "SELECT ra_game_id FROM games WHERE id = ?", (nothing_there,)
+    )
+    assert row["ra_game_id"] is None
