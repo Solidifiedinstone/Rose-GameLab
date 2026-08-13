@@ -30,7 +30,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
+from rose_gamelab.core.profiles import (
+    LaunchProfile,
+    ProfileStore,
+    parse_resolution,
+    with_resolution,
+)
 from rose_gamelab.ui.preferences import (
     STYLE_AXES,
     STYLE_RANGES,
@@ -165,6 +170,98 @@ class SettingsDialog(QDialog):
 
         layout.addStretch(1)
         return page
+
+    def _fill_proton_versions(self) -> None:
+        """List what is installed rather than asking somebody to remember it.
+
+        Every build is a directory with its version in the name, so there is
+        no reason to make anybody type "GE-Proton10-34" exactly.
+        """
+        from rose_gamelab.core import proton
+
+        self.proton_version.addItem("Steam decides", None)
+
+        try:
+            versions = proton.installed()
+        except Exception:
+            versions = []
+
+        for version in versions:
+            self.proton_version.addItem(version.label, version.name)
+
+        if not versions:
+            self.proton_version.setPlaceholderText("GE-Proton10-34")
+
+    def _select_proton(self, name) -> None:
+        if not name:
+            self.proton_version.setCurrentIndex(0)
+            return
+
+        for index in range(self.proton_version.count()):
+            if self.proton_version.itemData(index) == name:
+                self.proton_version.setCurrentIndex(index)
+                return
+
+        # Named in the profile but not installed any more — kept rather than
+        # silently dropped, because losing somebody's choice is worse than
+        # showing one that needs reinstalling.
+        self.proton_version.addItem(f"{name}  (not installed)", name)
+        self.proton_version.setCurrentIndex(self.proton_version.count() - 1)
+
+    def _chosen_proton(self):
+        data = self.proton_version.currentData()
+        if data:
+            return data
+        # Typed rather than picked.
+        typed = self.proton_version.currentText().strip()
+        return typed or None if typed != "Steam decides" else None
+
+    def _fill_resolutions(self) -> None:
+        """Offer this machine's own screens first, then the usual sizes.
+
+        A list that does not contain the resolution of the monitor somebody is
+        looking at is a list that has failed at its one job.
+        """
+        from PySide6.QtGui import QGuiApplication
+
+        from rose_gamelab.core.profiles import COMMON_RESOLUTIONS
+
+        self.resolution.addItem("Leave to the game", None)
+
+        seen: set[tuple[int, int]] = set()
+        for screen in QGuiApplication.screens():
+            size = (screen.geometry().width(), screen.geometry().height())
+            if size in seen:
+                continue
+            seen.add(size)
+            self.resolution.addItem(
+                f"{size[0]} × {size[1]}  ({screen.name()})", size
+            )
+
+        for size in COMMON_RESOLUTIONS:
+            if size in seen:
+                continue
+            seen.add(size)
+            self.resolution.addItem(f"{size[0]} × {size[1]}", size)
+
+    def _select_resolution(self, size) -> None:
+        for index in range(self.resolution.count()):
+            if self.resolution.itemData(index) == size:
+                self.resolution.setCurrentIndex(index)
+                return
+
+        if size:
+            # A resolution somebody typed by hand that no screen reports.
+            self.resolution.addItem(f"{size[0]} × {size[1]}", size)
+            self.resolution.setCurrentIndex(self.resolution.count() - 1)
+        else:
+            self.resolution.setCurrentIndex(0)
+
+    def _on_resolution_chosen(self) -> None:
+        # Saved through the same path as every other field on this form.
+        if getattr(self, "_loading_profile", False):
+            return
+        self._save_profile()
 
     def _on_startup_changed(self) -> None:
         self.preferences.scan_on_start = self.scan_on_start.isChecked()
@@ -663,12 +760,37 @@ class SettingsDialog(QDialog):
         for box in (self.use_gamemode, self.use_mangohud, self.use_gamescope):
             self.profile_form.addRow(box)
 
+        # A picker rather than only a text box. The resolution is the thing
+        # people actually want to set, and typing "-W 3440 -H 1440" is not
+        # something anybody should have to know to do it.
+        self.resolution = QComboBox()
+        self._fill_resolutions()
+        self.resolution.currentIndexChanged.connect(self._on_resolution_chosen)
+        self.profile_form.addRow("Resolution", self.resolution)
+
         self.gamescope_args = QLineEdit()
-        self.gamescope_args.setPlaceholderText("-W 1920 -H 1080 -f")
+        self.gamescope_args.setPlaceholderText("-f --hdr-enabled")
         self.profile_form.addRow("Gamescope options", self.gamescope_args)
 
-        self.proton_version = QLineEdit()
-        self.proton_version.setPlaceholderText("GE-Proton9-20")
+        # Said plainly, because the alternative is somebody setting a
+        # resolution here, launching a Steam game, and finding it ignored with
+        # no explanation anywhere.
+        wrappers = QLabel(
+            "These apply to games GameLab starts itself — ROMs, and anything "
+            "you added by hand. Steam, Heroic and Lutris start their own "
+            "games, so set launch options there instead. For Steam that is "
+            "Properties → Launch Options:\n"
+            "    gamescope -W 3440 -H 1440 -f -- %command%"
+        )
+        wrappers.setWordWrap(True)
+        wrappers.setObjectName("Subtle")
+        self.profile_form.addRow("", wrappers)
+
+        # Editable, so a build GameLab cannot see — one installed after this
+        # window opened, or somewhere unusual — can still be typed in.
+        self.proton_version = QComboBox()
+        self.proton_version.setEditable(True)
+        self._fill_proton_versions()
         self.profile_form.addRow("Proton version", self.proton_version)
 
         self.extra_args = QLineEdit()
@@ -729,11 +851,21 @@ class SettingsDialog(QDialog):
             return
 
         self.profile_name.setText(profile.name)
-        self.use_gamemode.setChecked(profile.use_gamemode)
-        self.use_mangohud.setChecked(profile.use_mangohud)
-        self.use_gamescope.setChecked(profile.use_gamescope)
-        self.gamescope_args.setText(profile.gamescope_args or "")
-        self.proton_version.setText(profile.proton_version or "")
+        # Filling the form fires the widgets' own change signals, and the
+        # resolution picker saves when it changes — without this, opening a
+        # profile would write it straight back before the user touched it.
+        self._loading_profile = True
+        try:
+            self.use_gamemode.setChecked(profile.use_gamemode)
+            self.use_mangohud.setChecked(profile.use_mangohud)
+            self.use_gamescope.setChecked(profile.use_gamescope)
+            self.gamescope_args.setText(
+                with_resolution(profile.gamescope_args, None) or ""
+            )
+            self._select_resolution(parse_resolution(profile.gamescope_args))
+            self._select_proton(profile.proton_version)
+        finally:
+            self._loading_profile = False
         self.extra_args.setText(profile.extra_args or "")
         self.env_vars.setText(
             " ".join(f"{k}={v}" for k, v in profile.env.items())
@@ -774,8 +906,11 @@ class SettingsDialog(QDialog):
             use_gamemode=self.use_gamemode.isChecked(),
             use_mangohud=self.use_mangohud.isChecked(),
             use_gamescope=self.use_gamescope.isChecked(),
-            gamescope_args=self.gamescope_args.text().strip() or None,
-            proton_version=self.proton_version.text().strip() or None,
+            gamescope_args=with_resolution(
+                self.gamescope_args.text().strip() or None,
+                self.resolution.currentData(),
+            ),
+            proton_version=self._chosen_proton(),
             extra_args=self.extra_args.text().strip() or None,
             env=self._parse_env(),
         )

@@ -127,6 +127,62 @@ class LaunchProfile:
         return env
 
 
+#: Resolutions worth offering even when no monitor reports them — somebody
+#: may be targeting a handheld, a TV, or downscaling on purpose.
+COMMON_RESOLUTIONS = (
+    (1280, 720), (1920, 1080), (2560, 1440), (3440, 1440), (3840, 2160),
+)
+
+
+def parse_resolution(args: Optional[str]) -> Optional[tuple[int, int]]:
+    """The -W/-H pair out of a Gamescope argument string, if it has one."""
+    if not args:
+        return None
+
+    width = height = None
+    tokens = args.split()
+    for index, token in enumerate(tokens[:-1]):
+        if token == "-W":
+            width = _as_int(tokens[index + 1])
+        elif token == "-H":
+            height = _as_int(tokens[index + 1])
+
+    return (width, height) if width and height else None
+
+
+def _as_int(value: str) -> Optional[int]:
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def with_resolution(args: Optional[str], size: Optional[tuple[int, int]]) -> Optional[str]:
+    """Set, replace or remove the resolution in a Gamescope argument string.
+
+    Everything else the user typed is kept exactly as it was. A settings box
+    that silently discards the flags somebody worked out is worse than one
+    that makes them type the whole thing.
+    """
+    tokens = (args or "").split()
+
+    kept: list[str] = []
+    skip = False
+    for index, token in enumerate(tokens):
+        if skip:
+            skip = False
+            continue
+        if token in ("-W", "-H"):
+            skip = index + 1 < len(tokens)
+            continue
+        kept.append(token)
+
+    if size:
+        kept = ["-W", str(size[0]), "-H", str(size[1]), *kept]
+
+    return " ".join(kept) or None
+
+
 class ProfileStore:
     """Storage and retrieval of launch profiles."""
 

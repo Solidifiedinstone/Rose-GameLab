@@ -656,3 +656,25 @@ def test_a_launch_option_reaches_its_own_emulator(library, profiles, db):
     options = library.launch_options_for(game_id)
 
     assert {o["system"] for o in options} == {"ps2", "ps3"}
+
+
+# ── Resolution in a launch profile ────────────────────────────────
+
+def test_the_resolution_can_be_read_back_out_of_gamescope_options():
+    from rose_gamelab.core.profiles import parse_resolution
+
+    assert parse_resolution("-W 3440 -H 1440 -f") == (3440, 1440)
+    assert parse_resolution("-f --hdr-enabled") is None
+    assert parse_resolution(None) is None
+
+
+def test_setting_a_resolution_keeps_the_other_options():
+    """A settings box that discards the flags somebody worked out is worse
+    than one that makes them type the whole thing."""
+    from rose_gamelab.core.profiles import with_resolution
+
+    assert with_resolution("-W 1920 -H 1080 -f --hdr-enabled", (3440, 1440)) == \
+        "-W 3440 -H 1440 -f --hdr-enabled"
+    assert with_resolution("-f", (2560, 1440)) == "-W 2560 -H 1440 -f"
+    assert with_resolution("-W 1920 -H 1080 -f", None) == "-f"
+    assert with_resolution(None, None) is None
