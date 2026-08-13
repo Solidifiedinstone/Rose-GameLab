@@ -28,17 +28,16 @@ from typing import Optional
 
 from PySide6.QtCore import (
     QEasingCurve,
-    QPoint,
     QPropertyAnimation,
+    QRect,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QCursor, QFont
+from PySide6.QtGui import QColor, QCursor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QGraphicsDropShadowEffect,
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -50,15 +49,25 @@ from rose_gamelab.ui.theme import Theme
 logger = logging.getLogger(__name__)
 
 #: How long a notification stays once it has finished arriving.
-HOLD_MS = 4200
+HOLD_MS = 2400
 #: The rise and the fade. Slow enough to notice, brief enough not to be in the
 #: way of a game somebody is in the middle of.
-SLIDE_MS = 420
-FADE_MS = 320
+FADE_IN_MS = 420
+FADE_MS = 620
 
-#: How far above the bottom edge it settles, and how far below it starts.
-BOTTOM_MARGIN = 64
-RISE_DISTANCE = 90
+#: The rise starts first and the sound follows it in. The other way round —
+#: sound first, then movement — reads as the picture lagging behind.
+SOUND_DELAY_MS = 260
+
+#: How far above the bottom edge the pill sits.
+BOTTOM_MARGIN = 72
+
+#: The unroll: it starts this wide and opens out to its full width.
+UNROLL_FROM = 84
+UNROLL_MS = 620
+
+#: What a compositor rule matches on to place this window.
+TOAST_WINDOW_TITLE = "Rose GameLab Achievement"
 
 TOAST_WIDTH = 460
 TOAST_HEIGHT = 92
@@ -87,25 +96,48 @@ class AchievementToast(QWidget):
         self.unlock = unlock
         self.theme = theme
 
-        # Frameless, transparent to input: a notification that can be clicked
-        # is a notification that can steal a click from the game underneath.
+        # A real window, deliberately. ToolTip was tried and does not map at
+        # all under Wayland: an unparented tooltip becomes an xdg-popup, which
+        # needs a parent surface, so nothing ever appeared on screen.
+        #
+        # Which leaves the placement problem, and the answer is below: the
+        # window covers the whole screen, so where the compositor decides to
+        # put it cannot be wrong. Transparent to input throughout, so a
+        # notification can never swallow a click meant for the game underneath.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowTransparentForInput
         )
+        # A stable, distinctive title. Under Wayland a client cannot place its
+        # own window — the compositor decides — so the only way to pin this to
+        # the bottom of the screen is a compositor rule, and a rule needs
+        # something to match on. See the note in the README.
+        self.setWindowTitle(TOAST_WINDOW_TITLE)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        # The window covers the whole screen and is invisible; the pill is
+        # placed at the bottom of it. This is not decoration — under Wayland a
+        # client cannot position its own window at all, so asking to sit at the
+        # bottom of the screen was a request the compositor was free to ignore,
+        # and Hyprland duly centred it. A window that already covers everything
+        # has nothing left to be placed wrongly, and where the pill sits inside
+        # it is entirely ours to decide.
         self.setFixedSize(TOAST_WIDTH, TOAST_HEIGHT)
 
         self._build()
 
-    def _build(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+    @staticmethod
+    def _screen_geometry():
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        return screen.geometry() if screen else QApplication.primaryScreen().geometry()
 
-        self.pill = QWidget()
+    def _build(self) -> None:
+        # No layout: the pill is positioned by hand, because its width is
+        # animated and a layout would fight that every frame.
+        self.pill = QWidget(self)
         self.pill.setObjectName("Pill")
         self.pill.setStyleSheet(
             f"#Pill {{"
@@ -172,74 +204,104 @@ class AchievementToast(QWidget):
             text.addWidget(subtitle)
 
         row.addLayout(text, 1)
-        outer.addWidget(self.pill)
+
+        self.pill.resize(TOAST_WIDTH, TOAST_HEIGHT)
+        self.pill.move(self._pill_target().topLeft())
 
     # ── Showing ───────────────────────────────────────────────────
 
-    def resting_position(self) -> QPoint:
-        """Bottom centre of the screen the pointer is on.
+    def _pill_target(self) -> QRect:
+        """Where the pill sits inside this window, fully unrolled.
 
-        `availableGeometry` rather than the full screen, so on a desktop with a
-        panel or a dock along the bottom the pill sits above it instead of
-        underneath it.
+        In window coordinates, so the compositor's opinion about the window
+        never enters into it. `availableGeometry` decides the bottom edge, so a
+        dock or panel along the bottom is sat above rather than under.
+        """
+        return QRect(0, 0, TOAST_WIDTH, TOAST_HEIGHT)
+
+    def place(self) -> bool:
+        """Put the window at the bottom centre. True if that could be done.
+
+        On X11 an application may position its own windows, so this works and
+        needs nothing from the user. On Wayland it cannot — the compositor
+        decides, and a client asking is simply ignored — so this returns False
+        and the window lands wherever the compositor puts it, usually the
+        middle of the screen. `packaging/hyprland-achievement-rule.lua` fixes
+        that for Hyprland; other compositors want the equivalent rule.
         """
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         if screen is None:
-            return QPoint(0, 0)
+            return False
 
         area = screen.availableGeometry()
-        return QPoint(
+        self.move(
             area.center().x() - self.width() // 2,
             area.bottom() - self.height() - BOTTOM_MARGIN,
         )
+        return QGuiApplication.platformName() not in ("wayland", "wayland-egl")
 
     def announce(self, *, silent: bool = False) -> None:
-        """Rise into view, hold, and fade out."""
-        target = self.resting_position()
-        self.move(target.x(), target.y() + RISE_DISTANCE)
+        """Unroll into view, hold, and fade away."""
+        self.place()
+        target = self._pill_target()
 
-        self._opacity = QGraphicsOpacityEffect(self)
-        # The shadow effect is already on the pill, so the fade goes on the
-        # window: a widget may only have one graphics effect at a time.
-        self.setGraphicsEffect(self._opacity)
-        self._opacity.setOpacity(0.0)
+        # Starts as a short stub in the middle of where it will end up, and
+        # opens outwards from there — a scroll unrolling rather than a
+        # rectangle sliding in.
+        stub = QRect(
+            target.center().x() - UNROLL_FROM // 2,
+            target.y(),
+            UNROLL_FROM,
+            target.height(),
+        )
+        self.pill.setGeometry(stub)
+
+        # Window opacity, NOT a QGraphicsOpacityEffect. The pill already has a
+        # drop shadow, and an effect rendered inside another effect is
+        # something Qt cannot do: it produced "a paint device can only be
+        # painted by one painter at a time" and left the fade broken.
+        self.setWindowOpacity(0.0)
 
         self.show()
         self.raise_()
 
-        self._rise = QPropertyAnimation(self, b"pos", self)
-        self._rise.setDuration(SLIDE_MS)
-        self._rise.setStartValue(QPoint(target.x(), target.y() + RISE_DISTANCE))
-        self._rise.setEndValue(target)
-        # Overshoots very slightly and settles, which is what makes it feel
-        # like an object arriving rather than a rectangle appearing.
-        self._rise.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._unroll = QPropertyAnimation(self.pill, b"geometry", self)
+        self._unroll.setDuration(UNROLL_MS)
+        self._unroll.setStartValue(stub)
+        self._unroll.setEndValue(target)
+        # Fast at first and easing to a stop, which is how something with
+        # weight unrolls.
+        self._unroll.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        self._appear = QPropertyAnimation(self._opacity, b"opacity", self)
-        self._appear.setDuration(SLIDE_MS)
+        self._appear = QPropertyAnimation(self, b"windowOpacity", self)
+        self._appear.setDuration(FADE_IN_MS)
         self._appear.setStartValue(0.0)
         self._appear.setEndValue(1.0)
         self._appear.setEasingCurve(QEasingCurve.Type.OutCubic)
 
-        self._rise.start()
+        self._unroll.start()
         self._appear.start()
 
         if not silent:
-            play_sound()
+            QTimer.singleShot(SOUND_DELAY_MS, play_sound)
 
-        QTimer.singleShot(SLIDE_MS + HOLD_MS, self._leave)
+        QTimer.singleShot(UNROLL_MS + HOLD_MS, self._leave)
 
     def _leave(self) -> None:
-        self._fade = QPropertyAnimation(self._opacity, b"opacity", self)
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
         self._fade.setDuration(FADE_MS)
-        self._fade.setStartValue(self._opacity.opacity())
+        self._fade.setStartValue(self.windowOpacity())
         self._fade.setEndValue(0.0)
         self._fade.setEasingCurve(QEasingCurve.Type.InCubic)
         self._fade.finished.connect(self._done)
         self._fade.start()
 
     def _done(self) -> None:
+        # close() as well as hide(): hiding leaves the surface around for the
+        # compositor to keep drawing decorations for, which is what left a
+        # ghost behind after the notification had gone.
         self.hide()
+        self.close()
         self.finished.emit()
         self.deleteLater()
 
@@ -303,7 +365,8 @@ def play_sound(path: Optional[Path] = None) -> bool:
         global _player, _audio
         _player = QMediaPlayer()
         _audio = QAudioOutput()
-        _audio.setVolume(0.55)
+        # Deliberately low: it plays over a game already making its own noise.
+        _audio.setVolume(0.38)
         _player.setAudioOutput(_audio)
         _player.setSource(QUrl.fromLocalFile(str(source)))
         _player.play()

@@ -102,6 +102,12 @@ stays.
 - **ROM health check** — verify your dumps against No-Intro and Redump
   catalogues and find the bad ones before they fail three hours in
   (`rose-gamelab verify`; you supply the DAT files)
+- Achievement unlocks appear as a pill at the bottom of the screen, with a
+  trophy and a chime. **On Wayland**, place it with
+  `packaging/hyprland-achievement-rule.lua` (or your compositor's equivalent):
+  a Wayland application is not allowed to position its own window, so without
+  a rule your compositor will put the notification wherever it likes. On X11
+  GameLab places it itself
 - An in-game panel on **Ctrl+Tab**: screenshots, saves, the achievement list
   with what is still unearned, and pad battery, over a running game. Ctrl
   rather than Shift so it does not fight Steam's own overlay

@@ -87,10 +87,10 @@ def test_it_sits_above_the_bottom_edge_of_the_screen_in_use(qt_app, theme):
         QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
     ).availableGeometry()
 
-    position = toast.resting_position()
+    toast.place()
 
-    assert position.y() < screen.bottom()
-    assert abs(position.x() + toast.width() // 2 - screen.center().x()) <= 2
+    assert toast.y() < screen.bottom()
+    assert abs(toast.x() + toast.width() // 2 - screen.center().x()) <= 2
     toast.close()
 
 
@@ -114,6 +114,33 @@ def test_a_missing_sound_file_is_not_an_error(tmp_path):
     """No audio is a normal state for a machine; nobody should lose the
     notification because the chime could not play."""
     assert play_sound(tmp_path / "nope.wav") is False
+
+
+def test_placement_reports_whether_it_could_actually_be_done(qt_app, theme):
+    """A Wayland client is not allowed to position its own window, and saying
+    so is what lets the interface point at the compositor rule instead of
+    pretending the request worked."""
+    from PySide6.QtGui import QGuiApplication
+
+    toast = AchievementToast(Unlock(title="A"), theme)
+
+    placed = toast.place()
+
+    assert placed is (QGuiApplication.platformName() not in ("wayland", "wayland-egl"))
+    toast.close()
+
+
+def test_the_rule_for_wayland_ships_with_the_project():
+    """Otherwise every Wayland user gets a notification in the middle of their
+    screen and no way to know why."""
+    from pathlib import Path
+
+    rule = Path(__file__).resolve().parent.parent / "packaging" / "hyprland-achievement-rule.lua"
+
+    assert rule.is_file()
+    text = rule.read_text()
+    assert "Rose GameLab Achievement" in text
+    assert "window_rule" in text
 
 
 def test_an_unlock_with_no_description_still_renders(qt_app, theme):
