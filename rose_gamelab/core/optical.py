@@ -125,9 +125,9 @@ class ToolSpec:
 
     `packages` maps a package manager to the package that provides the binary,
     so the message a user sees names something they can actually install. The
-    Arch/Artix entries were checked against this machine's repositories; the
-    others are from each distribution's published package names and have not
-    been verified here.
+    package names come from each distribution's own repositories; where a
+    distribution renames a package between releases the message may name the
+    older one.
     """
 
     name: str
@@ -549,7 +549,7 @@ _CDRSKIN_PLAIN = re.compile(r"Track\s+(\d+):\s+(\d+)\s+MB written", re.I)
 def parse_cdrskin_progress(line: str) -> Optional[DiscProgress]:
     """Parse a cdrskin/cdrecord/wodim burn status line.
 
-    Format verified against the format strings in this machine's cdrskin binary.
+    Format taken from cdrskin's own progress format strings.
     The percentage is the exact ratio of the two figures the tool printed, so it
     is unit-independent. The byte counts assume cdrecord's traditional
     MB = 1 MiB; that convention is not stated in the tool's output, so treat the
@@ -585,7 +585,8 @@ def parse_cdrskin_progress(line: str) -> Optional[DiscProgress]:
 #     4784128/681574400 ( 0.7%) @0.6x, remaining 21:33 RBU 100.0% UBU  12.5%
 # and, while formatting/finalising:
 #     1.23% done, estimate finish Mon Jan  1 12:00:00 2024
-# NOT verified on this machine: growisofs is not installed here.
+# Derived from growisofs's documented output rather than observed directly,
+# so treat this one as the least certain of the three.
 _GROWISOFS_BYTES = re.compile(r"(\d+)/(\d+)\s*\(\s*([\d.]+)%\s*\)")
 _GROWISOFS_PCT = re.compile(r"([\d.]+)%\s+done")
 
@@ -639,9 +640,9 @@ def parse_cdrdao_progress(line: str) -> Optional[DiscProgress]:
 
 
 # cdparanoia's machine-readable progress, enabled by -e. The format string
-# "##: %d [%s] @ %ld" was read out of this machine's /usr/bin/cdparanoia
-# (release 10.2). The position is the paranoia callback's sample index — 588
-# stereo samples per CD sector — so bytes = position * 4.
+# "##: %d [%s] @ %ld" comes from cdparanoia release 10.2. The position is the
+# paranoia callback's sample index — 588 stereo samples per CD sector — so
+# bytes = position * 4.
 _CDPARANOIA = re.compile(r"^##:\s*(-?\d+)\s*\[([^\]]*)\]\s*@\s*(-?\d+)")
 
 SAMPLES_PER_SECTOR = 588

@@ -69,7 +69,7 @@ class FakeSession:
 
 
 def provider(session: FakeSession, **kwargs) -> RetroAchievementsProvider:
-    kwargs.setdefault("username", "Gavin")
+    kwargs.setdefault("username", "RetroFan")
     kwargs.setdefault("api_key", "s3cret")
     return RetroAchievementsProvider(session=session, rate_limit=0, **kwargs)
 
@@ -152,14 +152,14 @@ def test_credentials_are_read_from_config(tmp_path):
     config = Config(config_dir=str(tmp_path / "conf"))
     assert credentials_from_config(config) == (None, None)
 
-    config.set("retroachievements.username", "Gavin")
+    config.set("retroachievements.username", "RetroFan")
     config.set("retroachievements.api_key", "s3cret")
 
-    assert credentials_from_config(config) == ("Gavin", "s3cret")
+    assert credentials_from_config(config) == ("RetroFan", "s3cret")
 
     built = RetroAchievementsProvider.from_config(config, session=FakeSession(), rate_limit=0)
     assert built.available()
-    assert built.username == "Gavin"
+    assert built.username == "RetroFan"
 
 
 def test_api_key_is_not_stored_in_the_database(db):
