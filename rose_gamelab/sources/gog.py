@@ -108,7 +108,7 @@ def find_info_files(game_dir: Path) -> list[Path]:
     """
     found: list[Path] = []
     for directory in (game_dir, game_dir / "game"):
-        if not directory.is_dir():
+        if not _quietly(Path.is_dir, directory):
             continue
         try:
             children = sorted(directory.iterdir())
@@ -117,9 +117,25 @@ def find_info_files(game_dir: Path) -> list[Path]:
             continue
         found.extend(
             child for child in children
-            if child.is_file() and GOGGAME_INFO_RE.match(child.name)
+            if _quietly(Path.is_file, child) and GOGGAME_INFO_RE.match(child.name)
         )
     return found
+
+
+def _quietly(check, path: Path) -> bool:
+    """Run a pathlib predicate, treating an unreadable path as "no".
+
+    `Path.is_file()` and friends swallow permission errors on Python 3.14 and
+    **raise** them on 3.12 and 3.13, so a single unreadable directory anywhere
+    under a games folder crashed the whole scan on the versions most people are
+    running. A directory we cannot look inside is not a GOG game; that is the
+    answer, not an exception.
+    """
+    try:
+        return bool(check(path))
+    except OSError as exc:
+        logger.debug("could not inspect %s: %s", path, exc)
+        return False
 
 
 def parse_info_file(path: Path) -> Optional[dict]:
@@ -199,9 +215,9 @@ class GOGProvider(SourceProvider):
         a `game/` subdirectory or a `goggame-*.info` is what makes it GOG's
         rather than some other program's start.sh.
         """
-        if not (path / "start.sh").is_file():
+        if not _quietly(Path.is_file, path / "start.sh"):
             return False
-        return (path / "game").is_dir() or bool(find_info_files(path))
+        return _quietly(Path.is_dir, path / "game") or bool(find_info_files(path))
 
     def game_dirs(self) -> list[Path]:
         """Every GOG install directory under the configured roots."""
@@ -244,7 +260,7 @@ class GOGProvider(SourceProvider):
             return
 
         for child in children:
-            if child.is_dir() and not child.is_symlink():
+            if _quietly(Path.is_dir, child) and not _quietly(Path.is_symlink, child):
                 yield from self._walk(child, depth - 1)
 
     # ── Discovery of games ────────────────────────────────────────

@@ -287,3 +287,29 @@ def test_explicit_root_is_not_replaced_by_a_default(tmp_path):
 def test_source_def(library):
     definition = GOGProvider(gog_root=str(library)).get_def()
     assert (definition.id, definition.type, definition.system) == ("gog", "gog", "pc")
+
+
+def test_an_unreadable_directory_is_survived_on_every_python(monkeypatch, library):
+    """Python 3.12 and 3.13 raise from `is_file()`; 3.14 returns False.
+
+    The suite runs on 3.14 here and 3.12/3.13 in CI, so this failed only in CI
+    and looked like a flake. It was not: a single unreadable folder anywhere
+    under a games directory crashed the whole GOG scan for most users. The
+    older behaviour is simulated so the fix is checked wherever the tests run.
+    """
+    from pathlib import Path
+
+    make_game(library, "witcher")
+    (library / "locked").mkdir()
+
+    real_is_file = Path.is_file
+
+    def raising_is_file(self):
+        if "locked" in str(self):
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", raising_is_file)
+
+    games = GOGProvider(gog_root=str(library)).discover()
+    assert [g.name for g in games] == ["The Witcher: Enhanced Edition"]

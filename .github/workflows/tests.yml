@@ -11,7 +11,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        # 3.14 is what the author runs; 3.12 is the floor. A pathlib change
+        # between them once broke a source scanner in CI only, so both ends
+        # of the supported range are tested.
+        python-version: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4

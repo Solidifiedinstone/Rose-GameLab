@@ -11,6 +11,8 @@ tool's documentation — those tests pin the parser's behaviour, not the tool's.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from rose_gamelab.core import optical as disc
@@ -789,25 +791,56 @@ def test_cancelling_stops_a_running_tool():
         runner(cancel).run(["/bin/sh", "-c", "sleep 30"], parser=lambda line: None)
 
 
-def test_cancelling_kills_the_whole_process_group():
-    """Tools fork helpers; terminating only the parent leaves the drive busy."""
+def test_cancelling_kills_the_whole_process_group(tmp_path):
+    """Tools fork helpers; terminating only the parent leaves the drive busy.
+
+    Two things here were CI-only failures and both were the test's fault:
+    `exec -a` is a bashism and `/bin/sh` is dash on Ubuntu, so the child died
+    instantly and the run finished before cancellation; and cancelling on a
+    fixed timer races a loaded runner. The child is now a real script with a
+    unique name, and cancellation waits until it is actually running.
+    """
     import subprocess
     import threading
+    import time
+
+    marker = f"rose-gamelab-disc-child-{os.getpid()}"
+    child = tmp_path / f"{marker}.sh"
+    child.write_text("#!/bin/sh\nsleep 30\n")
+    child.chmod(0o755)
+
+    def child_is_running() -> bool:
+        return subprocess.run(
+            ["pgrep", "-f", marker], capture_output=True, text=True
+        ).returncode == 0
 
     cancel = threading.Event()
-    threading.Timer(0.2, cancel.set).start()
 
-    marker = "rose-gamelab-disc-test-child"
+    def cancel_once_it_has_started() -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if child_is_running():
+                break
+            time.sleep(0.05)
+        cancel.set()
+
+    waiter = threading.Thread(target=cancel_once_it_has_started, daemon=True)
+    waiter.start()
+
     with pytest.raises(disc.DiscCancelled):
         runner(cancel).run(
-            ["/bin/sh", "-c", f"sh -c 'exec -a {marker} sleep 30' & wait"],
+            ["/bin/sh", "-c", f"{child} & wait"],
             parser=lambda line: None,
         )
 
-    survivors = subprocess.run(
-        ["pgrep", "-f", marker], capture_output=True, text=True
-    )
-    assert survivors.returncode != 0, f"child survived cancellation: {survivors.stdout}"
+    waiter.join(timeout=1)
+
+    # The kill is delivered to the group, but reaping is not instantaneous.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and child_is_running():
+        time.sleep(0.05)
+
+    assert not child_is_running(), "child survived cancellation"
 
 
 def test_cancelling_before_the_tool_starts_still_stops():
