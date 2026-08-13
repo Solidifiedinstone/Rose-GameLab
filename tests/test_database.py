@@ -281,3 +281,86 @@ def test_backup_produces_a_readable_copy(db, tmp_path):
     restored = Database(backup)
     assert restored.query_one("SELECT title FROM games")["title"] == "Secret of Mana"
     restored.close()
+
+
+# ── Transactions ──────────────────────────────────────────────────
+
+def test_a_transaction_batches_instead_of_committing_each_row(tmp_path):
+    """`execute()` commits per statement, which inside a transaction would end
+    it on the first row — silently turning a batch back into per-row commits,
+    the exact cost the batch was opened to avoid."""
+    from rose_gamelab.core.library import Library
+
+    database = Database(tmp_path / "batch.db")
+    library = Library(database)
+
+    with database.transaction():
+        for index in range(5):
+            library.add_game(title=f"G{index}", system="snes", path=f"/r/{index}.sfc")
+        # Still inside: the batch has not been committed away by add_game.
+        assert database.conn.in_transaction
+
+    assert len(library.list_games()) == 5
+    database.close()
+
+
+def test_work_outside_a_transaction_is_still_committed_immediately(tmp_path):
+    """The hashing pass documents that each file is committed as it completes,
+    so a cancelled run keeps what it already did. That must stay true."""
+    from rose_gamelab.core.library import Library
+
+    database = Database(tmp_path / "single.db")
+    Library(database).add_game(title="G", system="snes", path="/r/g.sfc")
+
+    assert not database.conn.in_transaction
+
+    # A separate connection sees it, which is what "committed" means.
+    other = Database(tmp_path / "single.db")
+    assert other.query_one("SELECT COUNT(*) AS n FROM games")["n"] == 1
+    other.close()
+    database.close()
+
+
+def test_a_failed_transaction_rolls_back(tmp_path):
+    database = Database(tmp_path / "rollback.db")
+
+    with pytest.raises(RuntimeError), database.transaction() as cur:
+        cur.execute(
+            "INSERT INTO games (title, sort_title, system, added_at)"
+            " VALUES ('Doomed', 'doomed', 'snes', '2026-01-01')"
+        )
+        raise RuntimeError("boom")
+
+    assert database.query_one("SELECT COUNT(*) AS n FROM games")["n"] == 0
+    database.close()
+
+
+def test_a_nested_commit_does_not_crash_the_exit(tmp_path):
+    """Regression: anything that committed inside a transaction block left no
+    transaction for the exit to commit, and it raised "cannot commit - no
+    transaction is active" — turning working code into a crash."""
+    from rose_gamelab.core.library import Library
+
+    database = Database(tmp_path / "nested.db")
+    library = Library(database)
+
+    with database.transaction() as cur:
+        cur.execute("SELECT 1")
+        database.conn.commit()          # something ends the transaction early
+        library.add_game(title="After", system="snes", path="/r/a.sfc")
+
+    assert len(library.list_games()) == 1
+    database.close()
+
+
+def test_the_real_error_survives_a_broken_exit(tmp_path):
+    """The exit used to raise its own OperationalError over the top of
+    whatever actually went wrong."""
+    database = Database(tmp_path / "mask.db")
+
+    with pytest.raises(ValueError, match="the real error"), database.transaction() as cur:
+        cur.execute("SELECT 1")
+        database.conn.commit()
+        raise ValueError("the real error")
+
+    database.close()
