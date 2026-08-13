@@ -117,13 +117,21 @@ wrong config or format costs you more than none at all:
 ## Installing on Linux
 
 GameLab is not packaged yet — no Flatpak, no AUR package. Until then it installs
-from source in about a minute, and cleanly: everything lives in one folder and a
-virtualenv, and nothing is written outside your home directory.
+with **pipx** in about a minute, and cleanly: pipx gives the application its own
+isolated environment, puts one command on your `PATH`, and writes nothing outside
+your home directory.
+
+Use pipx rather than `pip` because most distributions now ship a Python that
+refuses `pip install` outright (PEP 668, "externally managed environment").
+pipx works on those distributions without arguments, and uninstalls just as
+cleanly.
 
 ### What you need
 
 - **Linux** with a Wayland or X11 session
 - **Python 3.12 or newer** — `python --version` to check
+- **pipx** — `sudo pacman -S python-pipx`, `sudo apt install pipx`,
+  `sudo dnf install pipx`, or `sudo zypper install python3-pipx`
 - **Qt 6 system libraries**, which your distribution already ships
 
 Most distributions have everything already. If PySide6 fails to start with a
@@ -146,19 +154,30 @@ sudo zypper install python312 libQt6Gui6 libQt6Multimedia6
 ### Install
 
 ```sh
-git clone https://github.com/Solidifiedinstone/Rose-GameLab
-cd Rose-GameLab
-python -m venv .venv
-.venv/bin/pip install -e .
+pipx install git+https://github.com/Solidifiedinstone/Rose-GameLab
 ```
 
 That is the whole install. To run it:
 
 ```sh
-.venv/bin/rose-gamelab
+rose-gamelab
+```
+
+If your shell cannot find the command, `pipx ensurepath` adds pipx's directory
+to your `PATH` — then open a new terminal.
+
+Prefer to keep a copy of the source (you want the desktop entry below, or you
+plan to poke at the code)? Clone first and install from the folder:
+
+```sh
+git clone https://github.com/Solidifiedinstone/Rose-GameLab
+cd Rose-GameLab
+pipx install .
 ```
 
 ### Put it in your application menu
+
+From a clone of the repository:
 
 ```sh
 ./packaging/install-desktop-entry.sh
@@ -170,25 +189,17 @@ your launcher and dock like any other application. It needs no root, and
 
 It writes the launcher's **absolute path** into the entry on purpose: desktop
 files do not inherit your shell's `PATH`, so a bare command name works in a
-terminal and then silently fails from a dock.
-
-To run it by name from anywhere, put a small wrapper on your `PATH`:
-
-```sh
-mkdir -p ~/.local/bin
-printf '#!/usr/bin/env bash\nexec "$HOME/Rose-GameLab/.venv/bin/rose-gamelab" "$@"\n' \
-  > ~/.local/bin/rose-gamelab
-chmod +x ~/.local/bin/rose-gamelab
-```
+terminal and then silently fails from a dock. The script finds whichever
+`rose-gamelab` your `PATH` has, so a pipx install is picked up automatically.
 
 ### First run
 
 1. **Add your games.** Open **Add Source** and point it at a ROM folder, or let
    it find Steam, Heroic, Lutris and GOG installs by itself. Drag a ROM onto the
    window (or press `Ctrl+O`) to file a loose one into place.
-2. **Emulators are detected for you** — native binaries, Flatpaks and RetroArch
-   cores, across 45 systems. Anything missing is named, with the exact command
-   to install it.
+2. **Emulators are detected for you** — native binaries, Flatpaks, AppImages and
+   RetroArch cores, across 45 systems. Anything missing is named, with the exact
+   command to install it.
 3. **Art arrives on its own**, from Steam's CDN and the libretro thumbnail
    archive. No API key, no account.
 4. **Achievements are optional.** RetroAchievements needs your own free API key
@@ -213,19 +224,22 @@ your ROMs, saves or game files — only reads them.
 ### Updating
 
 ```sh
-cd Rose-GameLab
-git pull
-.venv/bin/pip install -e .
+pipx upgrade rose-gamelab
 ```
+
+Installed from a clone instead? `git pull` first, then `pipx install --force .`
+from the same folder.
 
 The library database migrates itself forward; your games, collections, notes
 and playtime survive.
 
+To remove GameLab entirely: `pipx uninstall rose-gamelab`.
+
 ### If something goes wrong
 
 ```sh
-.venv/bin/rose-gamelab --help          # every command
-.venv/bin/rose-gamelab list            # does it see your games?
+rose-gamelab --help          # every command
+rose-gamelab list            # does it see your games?
 ```
 
 Run it from a terminal to see what it is doing — errors are printed there rather
@@ -248,11 +262,18 @@ rose-gamelab export-steam         # add games to Steam (close Steam first)
 
 ## Development
 
+Working on GameLab rather than just running it? Use a virtualenv with an
+editable install — pipx is for installing the application, not for developing it.
+
 ```sh
+git clone https://github.com/Solidifiedinstone/Rose-GameLab
+cd Rose-GameLab
+python -m venv --system-site-packages .venv
+.venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest tests/ -q
 ```
 
-566 tests, none of which touch the network or require a controller, an optical
+1040 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing
