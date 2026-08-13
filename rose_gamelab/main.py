@@ -461,8 +461,6 @@ def doctor(ctx: click.Context) -> None:
         ("gamemoderun", "gamemode"),
         ("mangohud", "MangoHud"),
         ("gamescope", "Gamescope"),
-        ("cdrskin", "disc burning"),
-        ("cdparanoia", "CD ripping"),
     ):
         mark = "[green]yes[/]" if shutil.which(tool) else "[dim]no[/]"
         console.print(f"  {tool:14} {mark}  [dim]{what}[/]")

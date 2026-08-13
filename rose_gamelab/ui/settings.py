@@ -92,6 +92,7 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACING, SPACING, SPACING, SPACING)
 
+        from rose_gamelab.ui.widgets.retroarch_tab import RetroArchTab
         from rose_gamelab.ui.widgets.tools_tabs import (
             ControllersTab,
             SavesTab,
@@ -103,6 +104,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._startup_tab(), "Startup")
         tabs.addTab(self._profiles_tab(), "Launch Profiles")
         tabs.addTab(ControllersTab(theme), "Controllers")
+        tabs.addTab(RetroArchTab(library, theme), "RetroArch")
         tabs.addTab(SavesTab(library, theme), "Saves")
         tabs.addTab(self._artwork_tab(), "Artwork")
         tabs.addTab(self._retroachievements_tab(), "RetroAchievements")

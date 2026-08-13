@@ -119,8 +119,10 @@ stays.
   default; `--fix` only ever touches GameLab's own cache, never your games
 - **`rose-gamelab doctor`** — one page describing what GameLab can see on this
   machine, meant to be pasted into a bug report
-- Rip a CD or DVD to a `.bin`/`.cue` or `.iso` and add it to the library, and
-  burn your own DRM-free images back to disc with a read-back verification pass
+- **RetroArch, set up for you.** Settings → RetroArch installs it (through
+  Flatpak, which needs no password) and lists every system with a tick box.
+  Tick the consoles you own and GameLab fetches exactly those cores from the
+  libretro project — the systems you have games for are ticked already
 
 **Deliberately unfinished**
 
@@ -138,9 +140,6 @@ wrong config or format costs you more than none at all:
   capture. That is inherent to the approach rather than a bug to be fixed.
 - RetroAchievements hashing is implemented for the cartridge systems whose
   algorithm could be verified; the rest raise a named error.
-- The rip and burn command lines have never been run against real hardware
-  (no optical drive was available), though the parsing, drive detection,
-  cancellation and cue conversion are all tested.
 
 ## Installing on Linux
 
@@ -306,7 +305,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1306 tests, none of which touch the network or require a controller, an optical
+1238 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

@@ -29,7 +29,17 @@ class EmulatorDef:
     name: str
     icon: str = ""
     rom_extensions: tuple[str, ...] = ()
-    default_core: str = ""          # RetroArch core or standalone emulator id
+    #: The libretro core that runs this system, WITHOUT the `_libretro` suffix
+    #: — or, for the modern systems that have no core, the standalone emulator
+    #: that does. `emulator_detect.NO_LIBRETRO_CORE` says which is which.
+    #:
+    #: Core names are the ones the libretro buildbot actually publishes. Six of
+    #: these said "beetle_*", which is what the cores are called upstream but
+    #: not what they are distributed as (`mednafen_*`), and DuckStation's
+    #: libretro port is published as `swanstation`. Nothing failed loudly: the
+    #: launcher looked for a file that never existed and quietly reported that
+    #: no emulator was configured.
+    default_core: str = ""
     manufacturer: str = ""
     year: Optional[int] = None
     # Systems whose games are disc images tend to arrive as multi-file rips and
@@ -144,14 +154,14 @@ SYSTEMS: dict[str, EmulatorDef] = {
         (".3ds", ".3dsx", ".cci", ".cxi", ".cia"), "azahar", "Nintendo", 2011,
     ),
     "virtualboy": _system(
-        "virtualboy", "Virtual Boy", "🔴", (".vb", ".vboy"), "beetle_vb", "Nintendo", 1995,
+        "virtualboy", "Virtual Boy", "🔴", (".vb", ".vboy"), "mednafen_vb", "Nintendo", 1995,
     ),
 
     # ── Sony ──────────────────────────────────────────────────────
     "ps1": _system(
         "ps1", "PlayStation", "💿",
         (".cue", ".chd", ".pbp", ".m3u", ".ccd", ".mds", ".exe"),
-        "duckstation", "Sony", 1994, disc_based=True,
+        "swanstation", "Sony", 1994, disc_based=True,
     ),
     "ps2": _system(
         "ps2", "PlayStation 2", "💿",
@@ -207,7 +217,7 @@ SYSTEMS: dict[str, EmulatorDef] = {
     ),
     "saturn": _system(
         "saturn", "Sega Saturn", "💿",
-        (".cue", ".chd", ".ccd", ".mds", ".iso"), "beetle_saturn", "Sega", 1994,
+        (".cue", ".chd", ".ccd", ".mds", ".iso"), "mednafen_saturn", "Sega", 1994,
         disc_based=True,
     ),
     "dreamcast": _system(
@@ -226,27 +236,27 @@ SYSTEMS: dict[str, EmulatorDef] = {
         "atari7800", "Atari 7800", "👾", (".a78",), "prosystem", "Atari", 1986,
     ),
     "lynx": _system(
-        "lynx", "Atari Lynx", "👾", (".lnx", ".o"), "beetle_lynx", "Atari", 1989,
+        "lynx", "Atari Lynx", "👾", (".lnx", ".o"), "mednafen_lynx", "Atari", 1989,
     ),
     "jaguar": _system(
         "jaguar", "Atari Jaguar", "👾", (".j64", ".jag", ".rom"), "virtualjaguar", "Atari", 1993,
     ),
     "pc_engine": _system(
         "pc_engine", "TurboGrafx-16 / PC Engine", "🕹️",
-        (".pce", ".sgx"), "beetle_pce", "NEC", 1987,
+        (".pce", ".sgx"), "mednafen_pce", "NEC", 1987,
     ),
     "pc_engine_cd": _system(
         "pc_engine_cd", "TurboGrafx-CD / PC Engine CD", "💿",
-        (".cue", ".chd", ".ccd"), "beetle_pce", "NEC", 1988, disc_based=True,
+        (".cue", ".chd", ".ccd"), "mednafen_pce", "NEC", 1988, disc_based=True,
     ),
     "neogeo": _system(
         "neogeo", "Neo Geo", "👾", (".zip", ".7z"), "fbneo", "SNK", 1990,
     ),
     "ngp": _system(
-        "ngp", "Neo Geo Pocket", "🕹️", (".ngp", ".ngc"), "beetle_ngp", "SNK", 1998,
+        "ngp", "Neo Geo Pocket", "🕹️", (".ngp", ".ngc"), "mednafen_ngp", "SNK", 1998,
     ),
     "wonderswan": _system(
-        "wonderswan", "WonderSwan", "🕹️", (".ws", ".wsc"), "beetle_wswan", "Bandai", 1999,
+        "wonderswan", "WonderSwan", "🕹️", (".ws", ".wsc"), "mednafen_wswan", "Bandai", 1999,
     ),
     "3do": _system(
         "3do", "3DO", "💿", (".cue", ".chd", ".iso"), "opera", "Panasonic", 1993,
