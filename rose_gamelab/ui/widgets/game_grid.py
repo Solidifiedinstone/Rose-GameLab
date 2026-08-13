@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rose_gamelab.ui.theme import SPACING, Theme
+from rose_gamelab.ui.theme import SPACING, Style, Theme
 from rose_gamelab.ui.widgets.game_card import GameCard
 
 
@@ -48,6 +48,21 @@ class FlowLayout(QLayout):
 
     def takeAt(self, index: int) -> Optional[QLayoutItem]:
         return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def take_all(self) -> list[QLayoutItem]:
+        """Empty the layout in one step, returning what it held.
+
+        Removing widgets one at a time is quadratic and badly so: reparenting a
+        widget makes Qt ask its layout to give up the matching item, and that
+        search walks the whole list. Clearing 3000 cards cost four and a half
+        MILLION of those lookups and took two and a half seconds — which is what
+        every search, filter and sort paid, because each rebuilds the grid.
+
+        Emptying the list first means those lookups find an empty layout.
+        """
+        items, self._items = self._items, []
+        self.invalidate()
+        return items
 
     def expandingDirections(self) -> Qt.Orientations:
         return Qt.Orientation(0)
@@ -110,10 +125,16 @@ class GameGrid(QScrollArea):
     game_selected = Signal(int)
     game_context_requested = Signal(int, object)
 
-    def __init__(self, theme: Theme, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        theme: Theme,
+        parent: Optional[QWidget] = None,
+        style: Optional[Style] = None,
+    ) -> None:
         super().__init__(parent)
 
         self.theme = theme
+        self.style_ = style
         self.card_width = 160
         self.show_titles = True
         self._cards: dict[int, GameCard] = {}
@@ -149,6 +170,7 @@ class GameGrid(QScrollArea):
                 game, self.theme,
                 width=self.card_width,
                 show_title=self.show_titles,
+                style=self.style_,
             )
             card.activated.connect(self.game_activated.emit)
             card.selected.connect(self._on_card_selected)
@@ -160,9 +182,9 @@ class GameGrid(QScrollArea):
         self._container.adjustSize()
 
     def clear(self) -> None:
-        while self._flow.count():
-            item = self._flow.takeAt(0)
-            widget = item.widget() if item else None
+        """Remove every card."""
+        for item in self._flow.take_all():
+            widget = item.widget()
             if widget:
                 widget.setParent(None)
                 widget.deleteLater()
@@ -174,6 +196,24 @@ class GameGrid(QScrollArea):
         card = self._cards.get(game.id)
         if card:
             card.refresh(game)
+
+    def restyle(self, theme: Theme, style: Optional[Style] = None) -> None:
+        """Repaint every card in new colours or a new shape.
+
+        In place, never rebuilt. Rebuilding 500 cards took 100ms and made
+        dragging an appearance slider feel broken; repainting them is instant.
+        """
+        self.theme = theme
+        self.style_ = style
+
+        if style is not None and self._flow.spacing() != style.spacing:
+            self._flow.setSpacing(style.spacing)
+            self._flow.setContentsMargins(
+                style.spacing, style.spacing, style.spacing, style.spacing
+            )
+
+        for card in self._cards.values():
+            card.restyle(theme, style)
 
     @property
     def count(self) -> int:

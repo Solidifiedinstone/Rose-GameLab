@@ -129,6 +129,15 @@ class Sidebar(QFrame):
 
     # ── Construction ──────────────────────────────────────────────
 
+    def restyle(self, theme: Theme) -> None:
+        """Adopt a new palette.
+
+        Nothing to repaint: every colour in the sidebar comes from the window's
+        stylesheet by object name, so it follows a theme change on its own. The
+        theme is kept only so anything added later can reach it.
+        """
+        self.theme = theme
+
     def _build(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -163,6 +172,7 @@ class Sidebar(QFrame):
         # relative to the systems heading.
         self._library_section = self._add_section("Library")
         self._systems_section = self._add_section("Systems")
+        self._collections_section = self._add_section("Collections")
         self._sources_section = self._add_section("Sources")
 
         for icon, label, key in (
@@ -170,6 +180,9 @@ class Sidebar(QFrame):
             ("★", "Favourites", "favorites"),
             ("⏱", "Recently Played", "recent"),
             ("🎲", "Surprise Me", "random"),
+            # Without this, hiding a game removes it from every view and the
+            # "Unhide" action can never be reached — the game is gone for good.
+            ("👁", "Hidden", "hidden"),
             ("🌐", "Browse", "browse"),
         ):
             self.add_item(icon, label, key=key, checked=(key == "all"))
@@ -241,6 +254,10 @@ class Sidebar(QFrame):
         Only systems with games are shown — an empty console is noise.
         """
         self._repopulate(self._systems_section, systems, prefix="system")
+
+    def set_collections(self, collections: list[tuple[str, str, str, int]]) -> None:
+        """Populate the collections group: (key, icon, label, count)."""
+        self._repopulate(self._collections_section, collections, prefix="collection")
 
     def set_sources(self, sources: list[tuple[str, str, str, int]]) -> None:
         """Populate the sources group: (key, icon, label, count)."""

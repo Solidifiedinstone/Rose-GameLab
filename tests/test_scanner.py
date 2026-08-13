@@ -244,3 +244,134 @@ def test_returning_files_are_unflagged(tmp_path, scanner, library):
     assert scanner.mark_missing_files() == 0
     game = library.list_games()[0]
     assert library.files_for(game.id)[0]["missing"] == 0
+
+
+# ── Folder games ──────────────────────────────────────────────────
+#
+# Regression cover for the PS3 collection that imported forty games as three
+# hundred entries.
+
+def ps3_game(root: Path, name: str) -> Path:
+    game = root / name
+    make(game, "PS3_GAME/USRDIR/EBOOT.BIN")
+    make(game, "PS3_DISC.SFB")
+    for junk in ("COALESCED_INT.bin", "GLOBALSHADERCACHE-PS3.bin", "audiof.bin"):
+        make(game, f"PS3_GAME/USRDIR/{junk}")
+    return game
+
+
+def test_walk_does_not_descend_into_a_folder_game(tmp_path):
+    ps3_game(tmp_path, "Demon's Souls (USA)")
+
+    assert list(walk_roms(tmp_path)) == []
+
+
+def test_walk_library_yields_the_folder_game_itself(tmp_path):
+    from rose_gamelab.core.folder_games import FolderGame
+    from rose_gamelab.core.scanner import walk_library
+
+    ps3_game(tmp_path, "Demon's Souls (USA)")
+    make(tmp_path, "Chrono Trigger.sfc")
+
+    found = list(walk_library(tmp_path))
+    games = [f for f in found if isinstance(f, FolderGame)]
+    files = [f for f in found if not isinstance(f, FolderGame)]
+
+    assert [g.title for g in games] == ["Demon's Souls (USA)"]
+    assert [f.name for f in files] == ["Chrono Trigger.sfc"]
+
+
+def test_scanning_ps3_folders_imports_one_game_each(scanner, library, tmp_path):
+    ps3_game(tmp_path, "Demon's Souls (USA)")
+    ps3_game(tmp_path, "Dark Souls (USA) (En,Fr,Es)")
+
+    result = scanner.scan_folder(tmp_path)
+
+    assert result.games_found == 2
+    assert result.imported.added == 2
+    assert library.count() == 2
+    assert {g.system for g in library.list_games()} == {"ps3"}
+
+
+def test_folder_game_launches_its_eboot(scanner, library, tmp_path):
+    game = ps3_game(tmp_path, "Demon's Souls (USA)")
+
+    scanner.scan_folder(tmp_path)
+
+    (entry,) = library.list_games()
+    target = library.launch_options_for(entry.id)[0]["target"]
+    assert Path(target) == game / "PS3_GAME" / "USRDIR" / "EBOOT.BIN"
+
+
+def test_scan_removes_debris_from_an_earlier_scan(scanner, library, tmp_path):
+    """Entries imported before folder layouts were understood are cleaned up."""
+    game = ps3_game(tmp_path, "Demon's Souls (USA)")
+
+    # Imported the way the old scanner would have: one game per inner file.
+    for junk in ("COALESCED_INT.bin", "GLOBALSHADERCACHE-PS3.bin"):
+        game_id = library.add_game(title=junk[:-4], system="ps3")
+        library.add_file(game_id, game / "PS3_GAME" / "USRDIR" / junk)
+    assert library.count() == 2
+
+    result = scanner.scan_folder(tmp_path)
+
+    assert result.debris_removed == 2
+    assert [g.title for g in library.list_games()] == ["Demon's Souls"]
+
+
+def test_debris_sweep_leaves_ordinary_games_alone(scanner, library, tmp_path):
+    make(tmp_path, "Chrono Trigger.sfc")
+    scanner.scan_folder(tmp_path)
+
+    assert scanner.remove_folder_game_debris() == 0
+    assert library.count() == 1
+
+
+def test_debris_sweep_leaves_neighbouring_folder_games_alone(
+    scanner, library, tmp_path
+):
+    """Two games on the same shelf must not be mistaken for one another.
+
+    Both sit directly in the collection folder, so anything keyed on a game's
+    parent directory answers for the first one twice — and deletes the second
+    as debris from it.
+    """
+    for name in ("Demon's Souls (USA)", "Ni no Kuni (USA)"):
+        game = tmp_path / name
+        make(game, "PS3_DISC.SFB")
+        make(game, "PS3_GAME/PARAM.SFO")
+
+    scanner.scan_folder(tmp_path)
+    assert library.count() == 2
+
+    assert scanner.remove_folder_game_debris() == 0
+    assert library.count() == 2
+
+
+def test_a_game_launched_from_a_directory_is_not_reported_missing(
+    scanner, library, tmp_path
+):
+    """Some games are launched from their folder; testing for a FILE lost them."""
+    game = tmp_path / "Ni no Kuni (USA)"
+    make(game, "PS3_DISC.SFB")
+    make(game, "PS3_GAME/PARAM.SFO")
+
+    scanner.scan_folder(tmp_path)
+    (entry,) = library.list_games()
+    assert Path(library.files_for(entry.id)[0]["path"]) == game
+
+    assert scanner.mark_missing_files() == 0
+    assert library.files_for(entry.id)[0]["missing"] == 0
+
+
+def test_a_folder_game_is_not_hashed(scanner, library, tmp_path):
+    """There is no single file to hash, and hashing one inside it means nothing."""
+    game = tmp_path / "Ni no Kuni (USA)"
+    make(game, "PS3_DISC.SFB")
+    make(game, "PS3_GAME/PARAM.SFO")
+
+    scanner.scan_folder(tmp_path)
+
+    assert scanner.hash_pending() == 0
+    (entry,) = library.list_games()
+    assert library.files_for(entry.id)[0]["missing"] == 0

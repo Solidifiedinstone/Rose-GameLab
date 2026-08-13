@@ -131,6 +131,76 @@ UNVERIFIED_SYSTEMS: dict[str, str] = {
 _INTERLEAVED_MEGADRIVE = (".smd",)
 
 
+#: RetroAchievements' names for the consoles GameLab can hash for, most likely
+#: spelling first. Matched against their own console list rather than mapped to
+#: id numbers, because a wrong id silently returns the wrong game's list.
+RA_CONSOLE_NAMES: dict[str, tuple[str, ...]] = {
+    "nes": ("NES/Famicom", "NES"),
+    "snes": ("SNES/Super Famicom", "SNES"),
+    "gb": ("Game Boy",),
+    "gbc": ("Game Boy Color",),
+    "megadrive": ("Genesis/Mega Drive", "Mega Drive", "Genesis"),
+    "genesis": ("Genesis/Mega Drive", "Mega Drive", "Genesis"),
+
+    # Consoles RetroAchievements supports but GameLab cannot hash for. They are
+    # mapped anyway so a game can be matched by title — see `find_game_by_title`.
+    # Without these, a library of PS2 games has no route to achievements at all,
+    # which is the common case and was silently unreachable.
+    "ps1": ("PlayStation",),
+    "psx": ("PlayStation",),
+    "ps2": ("PlayStation 2",),
+    "psp": ("PlayStation Portable",),
+    "arcade": ("Arcade",),
+    "dreamcast": ("Dreamcast",),
+    "sega_sat": ("Saturn",),
+    "segacd": ("Sega CD",),
+    "n64": ("Nintendo 64",),
+    "gba": ("Game Boy Advance",),
+    "nds": ("Nintendo DS",),
+    "gamegear": ("Game Gear",),
+    "master_system": ("Master System",),
+    "pc_engine": ("PC Engine/TurboGrafx-16", "PC Engine"),
+    "fds": ("Famicom Disk System",),
+}
+
+#: Systems RetroAchievements has no set for at all. Kept as data so the
+#: interface can say "PlayStation 3 is not on RetroAchievements" rather than
+#: offering a Refresh that can only ever come back empty.
+NOT_ON_RETROACHIEVEMENTS: dict[str, str] = {
+    "ps3": "RetroAchievements has no PlayStation 3 sets",
+    "ps4": "RetroAchievements has no PlayStation 4 sets",
+    "pc": "RetroAchievements does not cover Windows games",
+    "steam": "Steam games have Steam achievements, not RetroAchievements",
+    "wiiu": "RetroAchievements has no Wii U sets",
+    "switch": "RetroAchievements has no Switch sets",
+    "xbox": "RetroAchievements has no Xbox sets",
+    "xenia": "RetroAchievements has no Xbox 360 sets",
+}
+
+
+def on_retroachievements(system: str) -> bool:
+    """Whether RetroAchievements covers this system at all."""
+    return system not in NOT_ON_RETROACHIEVEMENTS and system in RA_CONSOLE_NAMES
+
+
+def normalise_title(title: str) -> str:
+    """A title reduced to what two databases are likely to agree on.
+
+    Region tags, disc numbers, dump markers, subtitles after a dash, articles
+    and punctuation all differ between a ROM filename and RetroAchievements'
+    own naming, and none of them identify the game.
+    """
+    import re as _re
+
+    text = title.lower()
+    text = _re.sub(r"\((?:disc|disk|cd)\s*\d+[^)]*\)", " ", text)
+    text = _re.sub(r"[\(\[][^)\]]*[\)\]]", " ", text)      # (USA), [!], (Rev 1)
+    text = text.replace("&", " and ")
+    text = _re.sub(r"[^a-z0-9]+", " ", text)
+    text = _re.sub(r"\b(the|a|an)\b", " ", text)
+    return " ".join(text.split())
+
+
 class UnverifiedHashAlgorithm(NotImplementedError):
     """Raised for a system whose RA hash algorithm we did not verify.
 
@@ -263,9 +333,19 @@ def credentials_from_config(config) -> tuple[Optional[str], Optional[str]]:
     library database, under `retroachievements.username` / `.api_key`. Returns
     (None, None) when the user has not set them up, which is the normal state.
     """
-    username = config.get("retroachievements.username")
-    api_key = config.get("retroachievements.api_key")
-    return (username or None, api_key or None)
+    if config is not None:
+        username = config.get("retroachievements.username")
+        api_key = config.get("retroachievements.api_key")
+        if username and api_key:
+            return (username, api_key)
+
+    # Where the Settings screen puts them. Imported late so the metadata layer
+    # does not depend on the interface.
+    try:
+        from rose_gamelab.ui.preferences import retroachievements_credentials
+        return retroachievements_credentials()
+    except Exception:
+        return (None, None)
 
 
 class RetroAchievementsProvider(MetadataProvider):
@@ -293,6 +373,8 @@ class RetroAchievementsProvider(MetadataProvider):
         )
         # Tests pass rate_limit=0 to run against fakes without sleeping.
         self.limiter = RateLimiter(rate_limit)
+        #: RA console name -> id, fetched once. None until asked for.
+        self._consoles: Optional[dict[str, int]] = None
 
     @classmethod
     def from_config(cls, config, **kwargs) -> "RetroAchievementsProvider":
@@ -451,6 +533,70 @@ class RetroAchievementsProvider(MetadataProvider):
         )
         return payload if isinstance(payload, list) else []
 
+    def console_id_for(self, system: str) -> Optional[int]:
+        """RetroAchievements' own console id for a GameLab system.
+
+        Fetched from RA rather than hardcoded. Their ids are stable but this
+        module's rule is that anything not verified against the real service is
+        not written down as fact, and there is no way to check a number from
+        here. One request, cached for the life of the provider.
+        """
+        names = RA_CONSOLE_NAMES.get(system)
+        if not names:
+            return None
+
+        if self._consoles is None:
+            try:
+                payload = self._get("API_GetConsoleIDs.php", {})
+            except ProviderError as exc:
+                logger.debug("could not fetch RA console ids: %s", exc)
+                return None
+
+            self._consoles = {}
+            if isinstance(payload, list):
+                for entry in payload:
+                    if not isinstance(entry, dict):
+                        continue
+                    name = str(entry.get("Name") or "").strip().lower()
+                    identifier = _as_int(entry.get("ID"))
+                    if name and identifier is not None:
+                        self._consoles[name] = identifier
+
+        for name in names:
+            found = self._consoles.get(name.lower())
+            if found is not None:
+                return found
+
+        return None
+
+    def find_game_by_title(self, console_id: int, title: str,
+                           *, cutoff: float = 0.86) -> Optional[int]:
+        """Find a game on a console by name, when its file cannot be hashed.
+
+        A hash is an identity; a title is a guess, so the bar is set high and a
+        near-miss is refused rather than returned. Getting the wrong game's
+        achievements would be worse than getting none: it would show progress
+        for something the user has never played.
+        """
+        import difflib
+
+        wanted = normalise_title(title)
+        if not wanted:
+            return None
+
+        candidates = self.game_list(console_id, only_with_achievements=True)
+        best_id, best_score = None, 0.0
+
+        for entry in candidates:
+            name = entry.get("Title") or entry.get("title") or ""
+            score = difflib.SequenceMatcher(None, wanted, normalise_title(name)).ratio()
+            if score > best_score:
+                best_id, best_score = entry.get("ID") or entry.get("id"), score
+
+        if best_id is None or best_score < cutoff:
+            return None
+        return int(best_id)
+
     def find_game_by_hash(self, console_id: int, rom_hash: str) -> Optional[int]:
         """RA game id for a ROM hash, or None if that hash is not in RA's set.
 
@@ -535,6 +681,49 @@ def save_achievements(db, game_id: int, achievements: Iterable[Achievement]) -> 
             )
 
     return len(rows)
+
+
+def achievements_for(db, game_id: int) -> list[Achievement]:
+    """Every stored achievement for one game, earned ones first.
+
+    Read from the database rather than the network so the page opens instantly
+    and works offline — a refresh is something the user asks for, not something
+    that happens because they clicked a game.
+    """
+    rows = db.query(
+        """
+        SELECT ra_id, title, description, points, badge_url, earned_at, hardcore
+          FROM achievements
+         WHERE game_id = ?
+         ORDER BY earned_at IS NULL, points DESC, title
+        """,
+        (game_id,),
+    )
+
+    return [
+        Achievement(
+            ra_id=row["ra_id"],
+            title=row["title"],
+            description=row["description"],
+            points=row["points"],
+            badge_url=row["badge_url"],
+            earned_at=row["earned_at"],
+            hardcore=bool(row["hardcore"]),
+        )
+        for row in rows
+    ]
+
+
+def progress_for(db, game_id: int) -> tuple[int, int, int, int]:
+    """(earned, total, points earned, points available) for one game."""
+    found = achievements_for(db, game_id)
+    earned = [a for a in found if a.earned]
+    return (
+        len(earned),
+        len(found),
+        sum(a.points for a in earned),
+        sum(a.points for a in found),
+    )
 
 
 # ── Parsing ───────────────────────────────────────────────────────

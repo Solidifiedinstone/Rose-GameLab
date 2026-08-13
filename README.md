@@ -88,33 +88,123 @@ wrong config or format costs you more than none at all:
   (no optical drive was available), though the parsing, drive detection,
   cancellation and cue conversion are all tested.
 
-## Requirements
+## Installing on Linux
 
-- Linux
-- Python 3.12+
+GameLab is not packaged yet — no Flatpak, no AUR package. Until then it installs
+from source in about a minute, and cleanly: everything lives in one folder and a
+virtualenv, and nothing is written outside your home directory.
 
-## Installation
+### What you need
 
-Not yet packaged. Until it ships as a Flatpak and an AUR package:
+- **Linux** with a Wayland or X11 session
+- **Python 3.12 or newer** — `python --version` to check
+- **Qt 6 system libraries**, which your distribution already ships
+
+Most distributions have everything already. If PySide6 fails to start with a
+missing-library error, install Qt's runtime dependencies:
+
+```sh
+# Arch, Artix, Manjaro, EndeavourOS
+sudo pacman -S --needed python qt6-base qt6-multimedia
+
+# Debian, Ubuntu, Mint, Pop!_OS
+sudo apt install python3 python3-venv libgl1 libxkbcommon-x11-0 libegl1
+
+# Fedora
+sudo dnf install python3 qt6-qtbase qt6-qtmultimedia
+
+# openSUSE
+sudo zypper install python312 libQt6Gui6 libQt6Multimedia6
+```
+
+### Install
 
 ```sh
 git clone https://github.com/Solidifiedinstone/Rose-GameLab
 cd Rose-GameLab
-python -m venv --system-site-packages .venv
+python -m venv .venv
 .venv/bin/pip install -e .
+```
+
+That is the whole install. To run it:
+
+```sh
 .venv/bin/rose-gamelab
 ```
 
-To get a launcher icon in your application menu or dock:
+### Put it in your application menu
 
 ```sh
 ./packaging/install-desktop-entry.sh
 ```
 
-That installs a desktop entry and icons under `~/.local`, needs no root, and
-can be undone with `--uninstall`. It writes the launcher's absolute path into
-the entry, because desktop files do not inherit your shell's `PATH` — a bare
-command name works in a terminal and then silently fails from a dock.
+This adds a desktop entry and icons under `~/.local`, so GameLab appears in
+your launcher and dock like any other application. It needs no root, and
+`./packaging/install-desktop-entry.sh --uninstall` removes it again.
+
+It writes the launcher's **absolute path** into the entry on purpose: desktop
+files do not inherit your shell's `PATH`, so a bare command name works in a
+terminal and then silently fails from a dock.
+
+To run it by name from anywhere, put a small wrapper on your `PATH`:
+
+```sh
+mkdir -p ~/.local/bin
+printf '#!/usr/bin/env bash\nexec "$HOME/Rose-GameLab/.venv/bin/rose-gamelab" "$@"\n' \
+  > ~/.local/bin/rose-gamelab
+chmod +x ~/.local/bin/rose-gamelab
+```
+
+### First run
+
+1. **Add your games.** Open **Add Source** and point it at a ROM folder, or let
+   it find Steam, Heroic, Lutris and GOG installs by itself. Drag a ROM onto the
+   window (or press `Ctrl+O`) to file a loose one into place.
+2. **Emulators are detected for you** — native binaries, Flatpaks and RetroArch
+   cores, across 45 systems. Anything missing is named, with the exact command
+   to install it.
+3. **Art arrives on its own**, from Steam's CDN and the libretro thumbnail
+   archive. No API key, no account.
+4. **Achievements are optional.** RetroAchievements needs your own free API key
+   (Settings → RetroAchievements) because achievements are tied to your account.
+
+Nothing phones home, nothing needs an account, and everything works offline
+except art and achievements — which is unavoidable, since both live on the
+internet.
+
+### Where your data lives
+
+```
+~/.local/share/rose-gamelab/library.db     your library
+~/.config/rose-gamelab/preferences.json    theme, style, startup behaviour
+~/.config/rose-gamelab/credentials.json    API keys, owner-readable only (0600)
+~/.config/rose-gamelab/art/                downloaded covers
+```
+
+Deleting those three directories removes GameLab completely. It never touches
+your ROMs, saves or game files — only reads them.
+
+### Updating
+
+```sh
+cd Rose-GameLab
+git pull
+.venv/bin/pip install -e .
+```
+
+The library database migrates itself forward; your games, collections, notes
+and playtime survive.
+
+### If something goes wrong
+
+```sh
+.venv/bin/rose-gamelab --help          # every command
+.venv/bin/rose-gamelab list            # does it see your games?
+```
+
+Run it from a terminal to see what it is doing — errors are printed there rather
+than swallowed. Bug reports are welcome, and the more of that output you paste
+in, the faster it gets fixed.
 
 ## Command line
 

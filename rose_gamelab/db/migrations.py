@@ -264,6 +264,27 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX idx_games_ra_hash ON games(ra_hash);
         """,
     ),
+    (
+        3,
+        "per-game notes, and locking artwork separately from metadata",
+        """
+        -- Whatever the user wants to remember about a game: which save slot
+        -- is the good one, that it needs a controller unplugged to boot, where
+        -- they got to. Free text, theirs, never written by a scraper.
+        ALTER TABLE games ADD COLUMN notes TEXT;
+
+        -- Art chosen by hand must survive a rescrape. `metadata_locked` was
+        -- doing that job and doing too much with it: it gates the WHOLE scrape,
+        -- so picking a cover also stopped the game from ever getting a
+        -- description or a release date. Artwork gets its own lock.
+        ALTER TABLE games ADD COLUMN cover_locked INTEGER NOT NULL DEFAULT 0;
+
+        -- Anyone who already chose a cover meant to protect that cover, not to
+        -- freeze the rest of the entry, so their intent is carried across.
+        UPDATE games SET cover_locked = 1
+         WHERE metadata_locked = 1 AND cover_path IS NOT NULL;
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)

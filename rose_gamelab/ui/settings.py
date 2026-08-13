@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,19 +23,43 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSlider,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
-from rose_gamelab.ui.theme import SPACING, Theme, get_theme, list_theme_names, stylesheet
+from rose_gamelab.ui.preferences import (
+    STYLE_AXES,
+    STYLE_RANGES,
+    Preferences,
+    artwork_key,
+    retroachievements_credentials,
+    set_artwork_key,
+    set_retroachievements_credentials,
+)
+from rose_gamelab.ui.theme import (
+    COVER_WIDTHS,
+    RADIUS,
+    SPACING,
+    Theme,
+    list_style_names,
+    list_theme_names,
+)
 
 
 class SettingsDialog(QDialog):
     """The settings window."""
 
     theme_changed = Signal(object)
+    #: The whole look changed — theme, style, or one adjusted axis.
+    appearance_changed = Signal(object)
+    #: A source was removed, so the library behind this dialog is now stale.
+    sources_changed = Signal()
+    #: The artwork key changed, so the scraper needs rebuilding with it.
+    artwork_key_changed = Signal()
 
     def __init__(
         self,
@@ -42,16 +67,27 @@ class SettingsDialog(QDialog):
         profiles: ProfileStore,
         theme: Theme,
         parent: Optional[QWidget] = None,
+        preferences: Optional[Preferences] = None,
     ) -> None:
         super().__init__(parent)
 
         self.library = library
         self.profiles = profiles
+        self.preferences = preferences if preferences is not None else Preferences.load()
+        self.appearance = self.preferences.appearance()
         self.theme = theme
 
+        # Dragging a slider fires a change per pixel. Restyling the whole
+        # window on each one took ~160ms and made the sliders feel broken, so
+        # changes are coalesced and applied once the value settles.
+        self._apply_timer = QTimer(self)
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.setInterval(60)
+        self._apply_timer.timeout.connect(self._apply)
+
         self.setWindowTitle("Settings")
-        self.resize(680, 560)
-        self.setStyleSheet(stylesheet(theme))
+        self.resize(680, 620)
+        self.setStyleSheet(self.appearance.stylesheet())
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(SPACING, SPACING, SPACING, SPACING)
@@ -64,10 +100,14 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(self._appearance_tab(), "Appearance")
+        tabs.addTab(self._startup_tab(), "Startup")
         tabs.addTab(self._profiles_tab(), "Launch Profiles")
         tabs.addTab(ControllersTab(theme), "Controllers")
         tabs.addTab(SavesTab(library, theme), "Saves")
+        tabs.addTab(self._artwork_tab(), "Artwork")
+        tabs.addTab(self._retroachievements_tab(), "RetroAchievements")
         tabs.addTab(self._sources_tab(), "Sources")
+        tabs.addTab(self._remove_games_tab(), "Remove Games")
         tabs.addTab(SteamExportTab(library, theme), "Steam Export")
         tabs.addTab(self._about_tab(), "About")
         layout.addWidget(tabs)
@@ -77,43 +117,405 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
 
+    # ── Startup ───────────────────────────────────────────────────
+
+    def _startup_tab(self) -> QWidget:
+        """What the app does to itself when it opens."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(12)
+
+        self.scan_on_start = QCheckBox("Check sources for new games when GameLab opens")
+        self.scan_on_start.setChecked(self.preferences.scan_on_start)
+        self.scan_on_start.toggled.connect(self._on_startup_changed)
+        layout.addWidget(self.scan_on_start)
+
+        scan_note = QLabel(
+            "On, newly installed Steam games appear by themselves. Off, nothing "
+            "is checked until you ask — use Add Source, or the refresh action, "
+            "when you have installed something new."
+        )
+        scan_note.setObjectName("Subtle")
+        scan_note.setWordWrap(True)
+        layout.addWidget(scan_note)
+
+        self.art_on_start = QCheckBox("Fetch missing cover art when GameLab opens")
+        self.art_on_start.setChecked(self.preferences.art_on_start)
+        self.art_on_start.toggled.connect(self._on_startup_changed)
+        layout.addWidget(self.art_on_start)
+
+        art_note = QLabel(
+            "Separate from the scan on purpose: finding new games and reaching "
+            "out to the network for pictures are different things to want."
+        )
+        art_note.setObjectName("Subtle")
+        art_note.setWordWrap(True)
+        layout.addWidget(art_note)
+
+        layout.addStretch(1)
+        return page
+
+    def _on_startup_changed(self) -> None:
+        self.preferences.scan_on_start = self.scan_on_start.isChecked()
+        self.preferences.art_on_start = self.art_on_start.isChecked()
+        self.preferences.save()
+
     # ── Appearance ────────────────────────────────────────────────
 
     def _appearance_tab(self) -> QWidget:
+        """Theme, style, and every individual aspect, mixable in any combination."""
         page = QWidget()
-        form = QFormLayout(page)
-        form.setSpacing(SPACING)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        body = QWidget()
+        form = QFormLayout(body)
+        form.setSpacing(12)
+
+        # ── Theme ────────────────────────────────────────────────
         self.theme_picker = QComboBox()
         for key, name in list_theme_names():
             self.theme_picker.addItem(name, key)
-
-        current = next(
-            (i for i in range(self.theme_picker.count())
-             if get_theme(self.theme_picker.itemData(i)).name == self.theme.name),
-            0,
-        )
-        self.theme_picker.setCurrentIndex(current)
-        # Applied live rather than on close, so the user can see each theme.
+        self._select(self.theme_picker, self.preferences.theme)
         self.theme_picker.currentIndexChanged.connect(self._on_theme_changed)
+        form.addRow("Colours", self.theme_picker)
 
-        form.addRow("Theme", self.theme_picker)
+        # ── Style ────────────────────────────────────────────────
+        self.style_picker = QComboBox()
+        for key, name in list_style_names():
+            self.style_picker.addItem(name, key)
+        self._select(self.style_picker, self.preferences.style)
+        self.style_picker.currentIndexChanged.connect(self._on_style_changed)
+        form.addRow("Shape", self.style_picker)
 
         note = QLabel(
-            "Themes are plain JSON files. Drop your own into the themes folder "
-            "to use colours from Matugen or any other palette tool."
+            "Colours and shape are independent — any theme works with any "
+            "style. Everything below adjusts one aspect on top of the style "
+            "you picked, so you can build exactly the look you want."
         )
         note.setObjectName("Subtle")
         note.setWordWrap(True)
         form.addRow(note)
 
+        # ── Individual axes ──────────────────────────────────────
+        self.axis_widgets: dict[str, QWidget] = {}
+
+        for axis, (label, kind) in STYLE_AXES.items():
+            widget = self._axis_widget(axis, kind)
+            if widget is not None:
+                self.axis_widgets[axis] = widget
+                form.addRow(label, widget)
+
+        reset = QPushButton("Reset adjustments")
+        reset.setToolTip("Back to the chosen style exactly as it ships.")
+        reset.clicked.connect(self._reset_overrides)
+        form.addRow("", reset)
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll, 1)
         return page
 
+    @staticmethod
+    def _select(picker: QComboBox, key: str) -> None:
+        index = picker.findData(key)
+        if index >= 0:
+            picker.setCurrentIndex(index)
+
+    def _axis_widget(self, axis: str, kind: str) -> Optional[QWidget]:
+        """One control for one style aspect, wired to update live."""
+        value = self.preferences.value_for(axis)
+
+        if kind == "int":
+            low, high = STYLE_RANGES[axis]
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(10)
+
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(low, high)
+            # A pill style asks for a radius larger than any control; showing a
+            # slider pinned to its maximum is honest about what it does.
+            slider.setValue(max(low, min(high, int(value))))
+            layout.addWidget(slider, 1)
+
+            readout = QLabel(str(slider.value()))
+            readout.setMinimumWidth(28)
+            readout.setObjectName("Subtle")
+            layout.addWidget(readout)
+
+            def changed(new_value: int, axis=axis, readout=readout) -> None:
+                # The number under the cursor updates immediately; the repaint
+                # it implies is what gets coalesced.
+                readout.setText(str(new_value))
+                self._override(axis, new_value, immediate=False)
+
+            slider.valueChanged.connect(changed)
+            row.slider = slider          # so _reset_overrides can put it back
+            row.readout = readout
+            return row
+
+        if kind == "bool":
+            box = QCheckBox()
+            box.setChecked(bool(value))
+            box.toggled.connect(lambda on, axis=axis: self._override(axis, on))
+            return box
+
+        if kind == "choice" and axis == "cover_size":
+            picker = QComboBox()
+            for name in COVER_WIDTHS:
+                picker.addItem(name.title(), name)
+            self._select(picker, value)
+            picker.currentIndexChanged.connect(
+                lambda _i, axis=axis, picker=picker: self._override(axis, picker.currentData())
+            )
+            return picker
+
+        return None
+
+    # ── Applying ──────────────────────────────────────────────────
+
     def _on_theme_changed(self) -> None:
-        theme = get_theme(self.theme_picker.currentData())
-        self.theme = theme
-        self.setStyleSheet(stylesheet(theme))
-        self.theme_changed.emit(theme)
+        self.preferences.theme = self.theme_picker.currentData()
+        self._apply()
+
+    def _on_style_changed(self) -> None:
+        """Switching style drops the adjustments made to the previous one.
+
+        Keeping them would be worse: a radius nudged for Sharp makes nonsense of
+        Pill, and the user would have no way to tell which of their settings
+        came from where.
+        """
+        self.preferences.style = self.style_picker.currentData()
+        self.preferences.clear_overrides()
+        self._sync_axis_widgets()
+        self._apply()
+
+    def _override(self, axis: str, value, *, immediate: bool = True) -> None:
+        self.preferences.override(axis, value)
+        if immediate:
+            self._apply()
+        else:
+            self._apply_timer.start()
+
+    def _reset_overrides(self) -> None:
+        self.preferences.clear_overrides()
+        self._sync_axis_widgets()
+        self._apply()
+
+    def _sync_axis_widgets(self) -> None:
+        """Put every control back in step with what the style actually is."""
+        for axis, widget in self.axis_widgets.items():
+            value = self.preferences.value_for(axis)
+
+            slider = getattr(widget, "slider", None)
+            if slider is not None:
+                low, high = STYLE_RANGES[axis]
+                slider.blockSignals(True)
+                slider.setValue(max(low, min(high, int(value))))
+                slider.blockSignals(False)
+                widget.readout.setText(str(slider.value()))
+                continue
+
+            if isinstance(widget, QCheckBox):
+                widget.blockSignals(True)
+                widget.setChecked(bool(value))
+                widget.blockSignals(False)
+                continue
+
+            if isinstance(widget, QComboBox):
+                widget.blockSignals(True)
+                self._select(widget, value)
+                widget.blockSignals(False)
+
+    def _apply(self) -> None:
+        """Repaint this dialog and the window behind it, and remember the choice."""
+        self.appearance = self.preferences.appearance()
+        self.theme = self.appearance.theme
+
+        self.setStyleSheet(self.appearance.stylesheet())
+        self.appearance_changed.emit(self.appearance)
+        # Kept for anything still listening for colours alone.
+        self.theme_changed.emit(self.appearance.theme)
+
+        self.preferences.save()
+
+    def closeEvent(self, event) -> None:
+        """Apply anything still pending, so a quick close keeps the last nudge."""
+        if self._apply_timer.isActive():
+            self._apply_timer.stop()
+            self._apply()
+        super().closeEvent(event)
+
+    # ── Artwork ───────────────────────────────────────────────────
+
+    def _artwork_tab(self) -> QWidget:
+        """Where the optional artwork key goes, and what it buys.
+
+        Steam and the libretro archive need no credentials and cover most of a
+        library between them. This is for the rest — launchers, fan games,
+        storefront exclusives, dumps the archive has not got.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(12)
+
+        note = QLabel(
+            "GameLab finds most art on its own, with no account and no key.\n\n"
+            "SteamGridDB covers what the free sources cannot: launchers like "
+            "Sober, fan games, and console dumps the archive is missing. A key "
+            "is free — create one at steamgriddb.com under Preferences → API."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("Subtle")
+        layout.addWidget(note)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("SteamGridDB key"))
+
+        self.griddb_key = QLineEdit()
+        self.griddb_key.setPlaceholderText("Paste your key here")
+        self.griddb_key.setText(artwork_key() or "")
+        # A credential should not sit on screen in plain text by default.
+        self.griddb_key.setEchoMode(QLineEdit.EchoMode.Password)
+        row.addWidget(self.griddb_key, 1)
+
+        show = QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self.griddb_key.setEchoMode(
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        layout.addLayout(row)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        save = QPushButton("Save key")
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save_artwork_key)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+        self.griddb_status = QLabel()
+        self.griddb_status.setWordWrap(True)
+        self.griddb_status.setObjectName("Subtle")
+        self._show_key_status()
+        layout.addWidget(self.griddb_status)
+
+        layout.addStretch(1)
+        return page
+
+    # ── RetroAchievements ─────────────────────────────────────────
+
+    def _retroachievements_tab(self) -> QWidget:
+        """Achievements are tied to an account, so both halves are needed."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(12)
+
+        note = QLabel(
+            "Tracks achievements and your progress on retro games, and shows "
+            "them on a game's page.\n\n"
+            "Free — the key is on your RetroAchievements profile under "
+            "Settings → Keys. Both the username and the key are needed, "
+            "because progress is tied to your account."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("Subtle")
+        layout.addWidget(note)
+
+        user, key = retroachievements_credentials()
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Username"))
+        self.ra_username = QLineEdit()
+        self.ra_username.setText(user or "")
+        row.addWidget(self.ra_username, 1)
+        layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("API key"))
+        self.ra_key = QLineEdit()
+        self.ra_key.setText(key or "")
+        self.ra_key.setEchoMode(QLineEdit.EchoMode.Password)
+        row.addWidget(self.ra_key, 1)
+
+        show = QCheckBox("Show")
+        show.toggled.connect(
+            lambda on: self.ra_key.setEchoMode(
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
+            )
+        )
+        row.addWidget(show)
+        layout.addLayout(row)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        save = QPushButton("Save credentials")
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save_ra_credentials)
+        buttons.addWidget(save)
+        layout.addLayout(buttons)
+
+        self.ra_status = QLabel()
+        self.ra_status.setWordWrap(True)
+        self.ra_status.setObjectName("Subtle")
+        self._show_ra_status()
+        layout.addWidget(self.ra_status)
+
+        # Only these five have a hash algorithm verified against real dumps,
+        # and matching a game needs one. Said plainly rather than letting the
+        # user wonder why a PlayStation game never finds anything.
+        supported = QLabel(
+            "Matching works for NES, SNES, Game Boy, Game Boy Color and Mega "
+            "Drive. Other systems hash differently and are not implemented yet."
+        )
+        supported.setWordWrap(True)
+        supported.setObjectName("Subtle")
+        layout.addWidget(supported)
+
+        layout.addStretch(1)
+        return page
+
+    def _show_ra_status(self) -> None:
+        user, key = retroachievements_credentials()
+        self.ra_status.setText(
+            f"Signed in as {user}."
+            if user and key else
+            "Not set up — achievements already stored still show, but nothing "
+            "new can be fetched."
+        )
+
+    def _save_ra_credentials(self) -> None:
+        set_retroachievements_credentials(
+            self.ra_username.text(), self.ra_key.text()
+        )
+        self._show_ra_status()
+        self.artwork_key_changed.emit()
+
+    def _show_key_status(self) -> None:
+        if artwork_key():
+            self.griddb_status.setText(
+                "A key is set. It is also read from STEAMGRIDDB_API_KEY if you "
+                "would rather not store it on disk."
+            )
+        else:
+            self.griddb_status.setText(
+                "No key set — the free sources are still used, so most games "
+                "will still find art."
+            )
+
+    def _save_artwork_key(self) -> None:
+        set_artwork_key(self.griddb_key.text())
+        self._show_key_status()
+        self.artwork_key_changed.emit()
 
     # ── Launch profiles ───────────────────────────────────────────
 
@@ -298,8 +700,8 @@ class SettingsDialog(QDialog):
         self._reload_sources()
 
         note = QLabel(
-            "Removing a source keeps its games in your library, along with "
-            "their playtime and artwork."
+            "Removing a source asks what to do with its games. Nothing on "
+            "disk is ever deleted — only what GameLab keeps."
         )
         note.setObjectName("Subtle")
         note.setWordWrap(True)
@@ -325,8 +727,199 @@ class SettingsDialog(QDialog):
         if item is None:
             return
 
-        self.library.remove_source(item.data(Qt.ItemDataRole.UserRole))
+        source_id = item.data(Qt.ItemDataRole.UserRole)
+        count = self.library.count_games_for_source(source_id)
+
+        if count:
+            # Removing the source but silently keeping its games is how a
+            # library fills up with entries that no sidebar row matches. The
+            # choice is the user's, so it is asked rather than assumed.
+            box = QMessageBox(self)
+            box.setWindowTitle("Remove source")
+            box.setText(f"Remove this source and its {count} game"
+                        f"{'s' if count != 1 else ''}?")
+            box.setInformativeText(
+                "The games disappear from your library along with their "
+                "playtime and artwork.\n\n"
+                "Nothing is deleted from your disk — rescanning the folder "
+                "brings them back."
+            )
+
+            remove_all = box.addButton(
+                f"Remove source and {count} game{'s' if count != 1 else ''}",
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+            keep = box.addButton("Keep the games", QMessageBox.ButtonRole.ActionRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(remove_all)
+            box.exec()
+
+            clicked = box.clickedButton()
+            if clicked not in (remove_all, keep):
+                return
+            remove_games = clicked is remove_all
+        else:
+            remove_games = False
+
+        removed = self.library.remove_source(source_id, remove_games=remove_games)
+
         self._reload_sources()
+        # The grid behind this dialog is now showing games that are gone.
+        self.sources_changed.emit()
+
+        if not remove_games and removed == 0 and count:
+            QMessageBox.information(
+                self, "Games kept",
+                f"{count} game{'s' if count != 1 else ''} stayed in your "
+                "library. Find them under “No source” in the sidebar.",
+            )
+
+    # ── Removing games in bulk ────────────────────────────────────
+
+    def _remove_games_tab(self) -> QWidget:
+        """Clear out a whole console's worth of entries at once.
+
+        Removing games one at a time is fine for a mistake; it is useless when
+        a bad scan imported hundreds. Picking a console — or the games left
+        behind by a removed source — and clearing them is the way out.
+        """
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(SPACING)
+
+        heading = QLabel("Remove games from your library")
+        heading.setObjectName("Heading")
+        layout.addWidget(heading)
+
+        note = QLabel(
+            "Choose what to clear out. Your files are never deleted — only "
+            "GameLab's entries, with their playtime and artwork. Rescanning "
+            "the folder brings them back."
+        )
+        note.setObjectName("Subtle")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Remove"))
+
+        self.removal_picker = QComboBox()
+        self.removal_picker.currentIndexChanged.connect(self._removal_chosen)
+        row.addWidget(self.removal_picker, 1)
+        layout.addLayout(row)
+
+        self.removal_summary = QLabel()
+        self.removal_summary.setWordWrap(True)
+        self.removal_summary.setStyleSheet(
+            f"color: {self.theme.text}; background-color: {self.theme.panel};"
+            f" border-radius: {RADIUS}px; padding: 12px 14px; font-size: 13px;"
+        )
+        layout.addWidget(self.removal_summary)
+
+        self.removal_button = QPushButton("Remove these games")
+        self.removal_button.clicked.connect(self._remove_chosen_games)
+        layout.addWidget(self.removal_button)
+
+        layout.addStretch(1)
+
+        self._reload_removal_options()
+        return page
+
+    def _reload_removal_options(self) -> None:
+        """Fill the picker with what is actually in the library right now."""
+        from rose_gamelab.core.emulator import get_system
+        from rose_gamelab.core.library import NO_SOURCE
+
+        self.removal_picker.blockSignals(True)
+        self.removal_picker.clear()
+
+        self.removal_picker.addItem("Choose a console or source…", None)
+
+        for system_id, count in self.library.systems_in_library():
+            system = get_system(system_id)
+            name = system.name if system else system_id
+            self.removal_picker.addItem(
+                f"{name} — {count} game{'s' if count != 1 else ''}",
+                ("system", system_id, count),
+            )
+
+        # Source names are folder basenames, so a PS2 and a PS3 collection are
+        # both called "Roms". The path is what tells them apart.
+        sources = [row for row in self.library.list_sources() if row["game_count"]]
+        names = [row["name"] for row in sources]
+
+        for row in sources:
+            label = row["name"]
+            if names.count(label) > 1 and row["path"]:
+                label = f"{label} ({row['path']})"
+            self.removal_picker.addItem(
+                f"Everything from {label} — {row['game_count']} games",
+                ("source", row["id"], row["game_count"]),
+            )
+
+        orphaned = self.library.count_orphaned_games()
+        if orphaned:
+            self.removal_picker.addItem(
+                f"Games with no source — {orphaned}",
+                ("source", NO_SOURCE, orphaned),
+            )
+
+        self.removal_picker.blockSignals(False)
+        self._removal_chosen()
+
+    def _removal_chosen(self) -> None:
+        choice = self.removal_picker.currentData()
+
+        if choice is None:
+            self.removal_summary.setText(
+                "Nothing selected. Pick a console to see how many entries it has."
+            )
+            self.removal_button.setEnabled(False)
+            self.removal_button.setText("Remove these games")
+            return
+
+        _kind, _key, count = choice
+        self.removal_summary.setText(
+            f"This removes {count} entr{'ies' if count != 1 else 'y'} from your "
+            f"library.\n\nThe files stay exactly where they are on disk."
+        )
+        self.removal_button.setEnabled(True)
+        self.removal_button.setText(
+            f"Remove {count} game{'s' if count != 1 else ''}"
+        )
+
+    def _remove_chosen_games(self) -> None:
+        choice = self.removal_picker.currentData()
+        if choice is None:
+            return
+
+        kind, key, count = choice
+        label = self.removal_picker.currentText()
+
+        confirmed = QMessageBox.question(
+            self, "Remove games",
+            f"Remove {count} game{'s' if count != 1 else ''}?\n\n{label}\n\n"
+            "Nothing is deleted from your disk.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+
+        if kind == "system":
+            removed = self.library.remove_games_where(system=key)
+        else:
+            removed = self.library.remove_games_where(source_id=key)
+
+        self._reload_removal_options()
+        self._reload_sources()
+        self.sources_changed.emit()
+
+        QMessageBox.information(
+            self, "Removed",
+            f"{removed} game{'s' if removed != 1 else ''} removed from your "
+            "library.",
+        )
 
     # ── About ─────────────────────────────────────────────────────
 

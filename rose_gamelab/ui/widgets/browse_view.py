@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from rose_gamelab.core.emulator import get_system
-from rose_gamelab.ui.theme import RADIUS, SPACING, Theme
+from rose_gamelab.ui import theme as ui_theme
+from rose_gamelab.ui.theme import Theme
 
 
 class ChartRow(QFrame):
@@ -41,7 +42,7 @@ class ChartRow(QFrame):
         self.setFixedHeight(52)
         self.setStyleSheet(
             f"QFrame {{ background-color: {theme.panel};"
-            f" border-radius: {RADIUS}px; }}"
+            f" border-radius: {ui_theme.RADIUS}px; }}"
         )
 
         layout = QHBoxLayout(self)
@@ -96,8 +97,8 @@ class BrowseView(QWidget):
         self._system = "pc"
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(SPACING, SPACING, SPACING, SPACING)
-        layout.setSpacing(SPACING)
+        layout.setContentsMargins(ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING)
+        layout.setSpacing(ui_theme.SPACING)
 
         header = QHBoxLayout()
 
@@ -129,7 +130,7 @@ class BrowseView(QWidget):
         self.caveat.setWordWrap(True)
         self.caveat.setStyleSheet(
             f"color: {theme.warning}; background-color: {theme.panel};"
-            f" border-radius: {RADIUS}px; padding: 10px 14px; font-size: 13px;"
+            f" border-radius: {ui_theme.RADIUS}px; padding: 10px 14px; font-size: 13px;"
         )
         self.caveat.hide()
         layout.addWidget(self.caveat)
@@ -157,6 +158,18 @@ class BrowseView(QWidget):
         layout.addWidget(self.status)
 
     # ── Content ───────────────────────────────────────────────────
+
+    def restyle(self, theme: Theme) -> None:
+        """Adopt a new palette.
+
+        Chart rows are rebuilt whenever a chart loads, so they pick the new
+        colours up then; the banner is long-lived and is repainted here.
+        """
+        self.theme = theme
+        self.caveat.setStyleSheet(
+            f"color: {theme.warning}; background-color: {theme.panel};"
+            f" border-radius: {ui_theme.RADIUS}px; padding: 10px 14px; font-size: 13px;"
+        )
 
     def _on_system_changed(self) -> None:
         self._system = self.system_picker.currentData()

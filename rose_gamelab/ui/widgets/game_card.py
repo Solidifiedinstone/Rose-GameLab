@@ -28,7 +28,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from rose_gamelab.ui.theme import COVER_RATIO, RADIUS, Theme
+from rose_gamelab.ui.theme import COVER_RATIO, RADIUS, Style, Theme
 
 # Decoded covers, keyed by (path, width). Shared across every card so that
 # scrolling back up does not re-decode. Bounded so a huge library cannot
@@ -37,8 +37,51 @@ _PIXMAP_CACHE: dict[tuple[str, int], QPixmap] = {}
 _CACHE_LIMIT = 600
 
 
+#: How far a picture's shape may stray from 2:3 before it is fitted rather than
+#: cropped. Box art is close enough to crop invisibly; a PS3 dump's ICON0.PNG is
+#: 320x176, and cropping that to a portrait tile throws away nearly two thirds of
+#: the width — usually including the title.
+FIT_TOLERANCE = 0.18
+
+
+def _blurred(pixmap: QPixmap, width: int, height: int) -> QPixmap:
+    """A soft, dark version of a picture, to sit behind one that does not fill.
+
+    Blurred by scaling down hard and back up, which costs one resample and
+    needs no graphics-effect machinery.
+    """
+    small = pixmap.scaled(
+        max(1, width // 14), max(1, height // 14),
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    backdrop = small.scaled(
+        width, height,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+    # Darkened so the sharp picture in front stays the thing you look at.
+    canvas = QPixmap(width, height)
+    canvas.fill(Qt.GlobalColor.black)
+    painter = QPainter(canvas)
+    x = (backdrop.width() - width) / 2
+    y = (backdrop.height() - height) / 2
+    painter.drawPixmap(
+        QRectF(0, 0, width, height), backdrop, QRectF(x, y, width, height)
+    )
+    painter.fillRect(0, 0, width, height, QColor(0, 0, 0, 110))
+    painter.end()
+    return canvas
+
+
 def load_cover(path: str, width: int) -> Optional[QPixmap]:
-    """Load and scale a cover, using the shared cache. None if unreadable."""
+    """A cover prepared to exactly fill a card. None if unreadable.
+
+    Art that is roughly 2:3 is cropped to fit, which is invisible. Art that is
+    nothing like 2:3 — a dashboard icon, a landscape header — is shown WHOLE on
+    a blurred copy of itself, because cropping it to a portrait tile destroys it.
+    """
     key = (path, width)
     cached = _PIXMAP_CACHE.get(key)
     if cached is not None:
@@ -48,15 +91,47 @@ def load_cover(path: str, width: int) -> Optional[QPixmap]:
         return None
 
     pixmap = QPixmap(path)
-    if pixmap.isNull():
+    if pixmap.isNull() or pixmap.height() == 0:
         return None
 
     height = int(width * COVER_RATIO)
-    scaled = pixmap.scaled(
-        width, height,
-        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-        Qt.TransformationMode.SmoothTransformation,
-    )
+    target = width / height
+    source = pixmap.width() / pixmap.height()
+
+    if abs(source - target) / target <= FIT_TOLERANCE:
+        # Close enough to portrait: fill the tile and crop the overhang.
+        expanded = pixmap.scaled(
+            width, height,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        scaled = QPixmap(width, height)
+        scaled.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(scaled)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        x = (expanded.width() - width) / 2
+        y = (expanded.height() - height) / 2
+        painter.drawPixmap(
+            QRectF(0, 0, width, height), expanded, QRectF(x, y, width, height)
+        )
+        painter.end()
+    else:
+        # The wrong shape entirely: show all of it, centred, on a blurred
+        # backdrop so the tile is still full rather than letterboxed in black.
+        fitted = pixmap.scaled(
+            width, height,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        scaled = _blurred(pixmap, width, height)
+        painter = QPainter(scaled)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawPixmap(
+            int((width - fitted.width()) / 2),
+            int((height - fitted.height()) / 2),
+            fitted,
+        )
+        painter.end()
 
     if len(_PIXMAP_CACHE) >= _CACHE_LIMIT:
         # Plain FIFO eviction: cheap, and scrolling is mostly sequential so
@@ -87,12 +162,17 @@ class GameCard(QWidget):
         *,
         width: int = 160,
         show_title: bool = True,
+        style: Optional[Style] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
 
         self.game = game
         self.theme = theme
+        # Cards are painted by hand rather than styled by QSS, so the chosen
+        # style has to reach them explicitly or a card keeps the default
+        # corner radius no matter what the user picks.
+        self.style_ = style
         self.cover_width = width
         self.show_title = show_title
         self._hovered = False
@@ -124,6 +204,27 @@ class GameCard(QWidget):
             self.setToolTip(game.title)
         self.update()
 
+    def restyle(self, theme: Theme, style: Optional[Style] = None) -> None:
+        """Repaint in new colours or a new shape, without being rebuilt.
+
+        Cheap on purpose: changing a theme used to destroy and recreate every
+        card in the library, which is most of what made the appearance sliders
+        unusable.
+        """
+        self.theme = theme
+        self.style_ = style
+        self.update()
+
+    @property
+    def corner_radius(self) -> int:
+        """The cover's corner rounding, clamped to something a cover can have.
+
+        The Pill style asks for a radius larger than any widget; on a rectangle
+        the meaningful maximum is half the short side.
+        """
+        radius = self.style_.radius if self.style_ is not None else RADIUS
+        return max(0, min(radius, self.cover_width // 2))
+
     # ── Painting ──────────────────────────────────────────────────
 
     def paintEvent(self, event) -> None:
@@ -136,17 +237,17 @@ class GameCard(QWidget):
 
         # Rounded clip for the artwork, matching the rest of the interface.
         path = QPainterPath()
-        path.addRoundedRect(cover_rect, RADIUS, RADIUS)
+        radius = self.corner_radius
+        path.addRoundedRect(cover_rect, radius, radius)
 
         painter.save()
         painter.setClipPath(path)
 
         pixmap = load_cover(self.game.cover_path or "", self.cover_width)
         if pixmap is not None:
-            # Centre-crop, so covers that are not exactly 2:3 are not squashed.
-            x = (pixmap.width() - self.cover_width) / 2
-            y = (pixmap.height() - cover_height) / 2
-            painter.drawPixmap(cover_rect, pixmap, QRectF(x, y, self.cover_width, cover_height))
+            # Already prepared at exactly this size, cropped or fitted to suit
+            # its shape, so it is drawn straight in.
+            painter.drawPixmap(cover_rect, pixmap, QRectF(pixmap.rect()))
         else:
             self._paint_placeholder(painter, cover_rect)
 

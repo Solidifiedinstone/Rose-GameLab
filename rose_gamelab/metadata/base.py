@@ -2,9 +2,40 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
+
+#: Sent by every provider. Several of the services GameLab reads from are
+#: donated infrastructure that blocks unidentified clients outright — Wikidata
+#: returns 403 to the default `python-requests` agent — and all of them deserve
+#: to know who is calling and where to complain.
+#:
+#: Note this must be ASSIGNED onto a session's headers, never `setdefault`:
+#: requests populates its own User-Agent at construction, so setdefault always
+#: loses and the descriptive name never leaves the machine.
+USER_AGENT = "Rose-GameLab/0.1 (+https://github.com/Solidifiedinstone/Rose-GameLab)"
+
+#: Trademark noise that appears in a store's name for a game but never in a
+#: launcher's, a filename's, or a user's.
+_TRADEMARKS = ("™", "®", "©")
+
+
+def normalise_for_match(title: str) -> str:
+    """Reduce a title to what two names for the same game have in common.
+
+    Case, punctuation, trademark symbols and spacing all vary between a desktop
+    entry, a launcher manifest, a folder name and a store listing; none of them
+    change which game is meant. What survives is compared for EQUALITY, never
+    for similarity — see the callers for why a fuzzy match is not wanted.
+    """
+    text = (title or "").lower()
+    for mark in _TRADEMARKS:
+        text = text.replace(mark, "")
+
+    text = re.sub(r"[^\w\s]", " ", text)
+    return " ".join(text.split())
 
 
 @dataclass

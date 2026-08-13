@@ -34,8 +34,11 @@ from PySide6.QtWidgets import (
 from rose_gamelab.core import emulator_detect
 from rose_gamelab.core.discs import group_discs
 from rose_gamelab.core.emulator import SYSTEMS, get_system
-from rose_gamelab.core.scanner import infer_system, walk_roms
-from rose_gamelab.ui.theme import RADIUS, SPACING, Theme
+from rose_gamelab.core.folder_games import FolderGame
+from rose_gamelab.core.media import MediaKind, classify, describe
+from rose_gamelab.core.scanner import infer_system, walk_library
+from rose_gamelab.ui import theme as ui_theme
+from rose_gamelab.ui.theme import Theme
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +70,7 @@ class SourceTypeCard(QFrame):
         self._enabled = enabled
 
         self.setStyleSheet(
-            f"QFrame {{ background-color: {theme.panel}; border-radius: {RADIUS}px;"
+            f"QFrame {{ background-color: {theme.panel}; border-radius: {ui_theme.RADIUS}px;"
             f" border: 1px solid {theme.border}; }}"
             f"QFrame:hover {{ border-color: {theme.accent if enabled else theme.border}; }}"
         )
@@ -125,7 +128,13 @@ class AddSourceDialog(QDialog):
         self.theme = theme
         self.folder: Optional[Path] = None
         self.detected: dict[str, int] = {}
+        #: Per system, how many of each media kind — folders vs disc images.
+        self.media: dict[str, dict[MediaKind, int]] = {}
         self.chosen_system: Optional[str] = None
+        #: Read by the caller after exec(): the user asked for the organiser.
+        self.wants_organiser = False
+        #: …or to add a game by hand.
+        self.wants_manual_entry = False
 
         self.setWindowTitle("Add Games")
         self.resize(680, 620)
@@ -134,8 +143,8 @@ class AddSourceDialog(QDialog):
         self.setStyleSheet(stylesheet(theme))
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(SPACING, SPACING, SPACING, SPACING)
-        layout.setSpacing(SPACING)
+        layout.setContentsMargins(ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING, ui_theme.SPACING)
+        layout.setSpacing(ui_theme.SPACING)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._choose_page())
@@ -182,7 +191,7 @@ class AddSourceDialog(QDialog):
         note.setWordWrap(True)
         note.setStyleSheet(
             f"color: {self.theme.text}; background-color: {self.theme.panel};"
-            f" border-radius: {RADIUS}px; padding: 12px 14px; font-size: 13px;"
+            f" border-radius: {ui_theme.RADIUS}px; padding: 12px 14px; font-size: 13px;"
         )
         layout.addWidget(note)
 
@@ -196,10 +205,19 @@ class AddSourceDialog(QDialog):
              "ROMs, disc images, anything on disk. Sub-folders are fine — "
              "GameLab detects which system each game belongs to.",
              f"{playable} systems ready"),
+            ("organise", "🗂", "Loose ROMs, scattered about",
+             "Downloads, a USB stick, an old backup. GameLab identifies each "
+             "one and files it into a tidy per-system folder — after showing "
+             "you what moves where.",
+             "organise"),
             ("steam", "🎮", "Steam",
              "Found and imported automatically every time GameLab starts. "
              "Nothing to do.",
              "automatic" if steam_found else "not found"),
+            ("manual", "✎", "Something else entirely",
+             "A launcher, a script, a game built from source — anything with a "
+             "command. Pick it from your installed apps or type it in.",
+             "add by hand"),
             ("other", "🧩", "Heroic, Lutris, GOG",
              "Detected automatically if installed. Use Scan in the top bar to "
              "re-check for new games.",
@@ -209,7 +227,7 @@ class AddSourceDialog(QDialog):
         for key, icon, title, description, status in cards:
             card = SourceTypeCard(
                 key, icon, title, description, status, self.theme,
-                enabled=(key == "rom_folder"),
+                enabled=(key in ("rom_folder", "organise", "manual")),
             )
             card.clicked.connect(self._on_type_chosen)
             layout.addWidget(card)
@@ -228,7 +246,7 @@ class AddSourceDialog(QDialog):
         panel = QFrame()
         panel.setStyleSheet(
             f"QFrame {{ background-color: {self.theme.panel};"
-            f" border-radius: {RADIUS}px; }}"
+            f" border-radius: {ui_theme.RADIUS}px; }}"
         )
 
         outer = QVBoxLayout(panel)
@@ -274,6 +292,18 @@ class AddSourceDialog(QDialog):
         return panel
 
     def _on_type_chosen(self, key: str) -> None:
+        if key == "manual":
+            self.wants_manual_entry = True
+            self.reject()
+            return
+
+        if key == "organise":
+            # Closes and lets the caller open the organiser afterwards, rather
+            # than stacking a second modal on top of this one.
+            self.wants_organiser = True
+            self.reject()
+            return
+
         if key != "rom_folder":
             return
 
@@ -345,9 +375,17 @@ class AddSourceDialog(QDialog):
         hint = self.system_picker.currentData()
         self.chosen_system = hint
 
-        files = []
-        for index, path in enumerate(walk_roms(self.folder)):
-            files.append(path)
+        # Folder games and files are collected separately because they are
+        # counted differently: a PS3 folder is one game however many thousand
+        # files are inside it, and walking it looking for ROM extensions is the
+        # bug this split exists to prevent.
+        files: list[Path] = []
+        folders: list[FolderGame] = []
+        for index, found in enumerate(walk_library(self.folder)):
+            if isinstance(found, FolderGame):
+                folders.append(found)
+            else:
+                files.append(found)
             if index >= PREVIEW_FILE_LIMIT:
                 break
 
@@ -358,11 +396,28 @@ class AddSourceDialog(QDialog):
         unknown = by_system.pop(None, [])
         total_games = 0
         self.detected = {}
+        self.media: dict[str, dict[MediaKind, int]] = {}
 
         for system_id, paths in sorted(by_system.items(), key=lambda kv: kv[0] or ""):
             groups = group_discs(paths)
             self.detected[system_id] = len(groups)
             total_games += len(groups)
+
+            kinds = self.media.setdefault(system_id, {})
+            for group in groups:
+                kind = (
+                    MediaKind.PLAYLIST if group.is_multi_disc
+                    else classify(group.primary_file, system_id=system_id)
+                )
+                kinds[kind] = kinds.get(kind, 0) + 1
+
+        # A folder game's own marker files say which system it is, so the
+        # picker above does not override it — the same rule the scanner uses.
+        for game in folders:
+            self.detected[game.system_id] = self.detected.get(game.system_id, 0) + 1
+            kinds = self.media.setdefault(game.system_id, {})
+            kinds[MediaKind.FOLDER] = kinds.get(MediaKind.FOLDER, 0) + 1
+            total_games += 1
 
         self.preview_heading.setText(
             f"{total_games} games found" if total_games else "No games found"
@@ -374,8 +429,9 @@ class AddSourceDialog(QDialog):
             self._add_preview_note(
                 "Nothing here looks like a game.\n\n"
                 "If your games are in sub-folders that is fine — GameLab looks "
-                "inside them. If they are in an unusual format, choose the "
-                "system above instead of leaving it on automatic.",
+                "inside them, and it recognises games that ARE a folder, like "
+                "PS3 and Wii U titles. If they are in an unusual format, choose "
+                "the system above instead of leaving it on automatic.",
                 self.theme.warning,
             )
             return
@@ -400,7 +456,7 @@ class AddSourceDialog(QDialog):
         frame = QFrame()
         frame.setStyleSheet(
             f"QFrame {{ background-color: {self.theme.panel};"
-            f" border-radius: {RADIUS}px; }}"
+            f" border-radius: {ui_theme.RADIUS}px; }}"
         )
 
         layout = QVBoxLayout(frame)
@@ -418,6 +474,15 @@ class AddSourceDialog(QDialog):
         badge.setStyleSheet(f"color: {self.theme.text_dim};")
         top.addWidget(badge)
         layout.addLayout(top)
+
+        # What shape they are on disk. Worth showing because it is the one
+        # thing users check by hand: a PS3 collection that reads back as
+        # "40 game folders" is proof GameLab understood the dumps.
+        shapes = describe(self.media.get(system_id, {}))
+        if shapes:
+            kinds = QLabel(shapes)
+            kinds.setStyleSheet(f"color: {self.theme.text_dim}; font-size: 12px;")
+            layout.addWidget(kinds)
 
         if option is not None:
             status = QLabel(f"✓  Ready to play with {option.name}")
@@ -455,7 +520,7 @@ class AddSourceDialog(QDialog):
         note.setWordWrap(True)
         note.setStyleSheet(
             f"color: {colour}; background-color: {self.theme.panel};"
-            f" border-radius: {RADIUS}px; padding: 12px 14px; font-size: 13px;"
+            f" border-radius: {ui_theme.RADIUS}px; padding: 12px 14px; font-size: 13px;"
         )
         self.preview_layout.addWidget(note)
 

@@ -12,6 +12,7 @@ GameLab user rather than just the impatient one.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -19,14 +20,31 @@ from typing import Optional
 
 import requests
 
-from rose_gamelab.metadata.base import GameMetadata, MetadataProvider, ProviderError
+from rose_gamelab.metadata.base import (
+    USER_AGENT,
+    GameMetadata,
+    MetadataProvider,
+    ProviderError,
+    normalise_for_match,
+)
 
 logger = logging.getLogger(__name__)
 
 STORE_API = "https://store.steampowered.com/api/appdetails"
+SEARCH_API = "https://store.steampowered.com/api/storesearch/"
+
+# Where Steam publishes the real filename of every asset it holds for an app.
+# This is the only way to get art for anything released recently — see
+# `assets()` for why guessing the URL stopped working.
+STORE_BROWSE_API = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/"
+ASSET_BASE = "https://shared.akamai.steamstatic.com/store_item_assets/"
 
 # Steam's artwork CDN. `library_600x900` is the portrait cover used in the
 # Steam library grid, which is the shape GameLab's cover grid wants.
+#
+# These are the LEGACY paths, and they only exist for apps published before
+# Steam moved to content-hashed asset directories. They are kept as a fallback
+# for the case where the store service cannot be reached at all.
 CDN = "https://cdn.cloudflare.steamstatic.com/steam/apps"
 ART_URLS = {
     "cover": (
@@ -39,6 +57,25 @@ ART_URLS = {
     ),
     "hero": (f"{CDN}/{{appid}}/library_hero.jpg", f"{CDN}/{{appid}}/page_bg_generated_v6b.jpg"),
     "logo": (f"{CDN}/{{appid}}/logo.png", f"{CDN}/{{appid}}/logo_2x.png"),
+}
+
+# What Steam's store service calls each kind of art we want, best first.
+# `library_capsule` is the portrait cover; the landscape forms are fallbacks
+# for apps that genuinely have no portrait art rather than shape preferences.
+ASSET_NAMES = {
+    "cover": ("library_capsule_2x", "library_capsule", "main_capsule", "header"),
+    "hero": ("library_hero_2x", "library_hero", "page_background"),
+    "logo": ("library_logo", "logo"),
+}
+
+# Words that mark a re-release rather than a different game. Used only when
+# looking for ARTWORK, where the cover of a remaster is the right picture; a
+# remaster's release date and reviews are a different matter, so metadata never
+# accepts these.
+EDITION_WORDS = {
+    "remastered", "remaster", "remake", "hd", "definitive", "complete",
+    "enhanced", "deluxe", "ultimate", "goty", "anniversary", "redux",
+    "edition", "collection", "the", "of", "year", "game", "classic",
 }
 
 # Requests per second. Deliberately conservative.
@@ -76,15 +113,71 @@ class SteamStoreProvider(MetadataProvider):
         rate_limit: float = RATE_LIMIT,
     ) -> None:
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", "Rose-GameLab/0.1 (+https://github.com/Solidifiedinstone/Rose-GameLab)")
+        self.session.headers["User-Agent"] = USER_AGENT
         # Tests pass rate_limit=0 to run against fakes without sleeping.
         self.limiter = RateLimiter(rate_limit)
         # Artwork comes from a static CDN, not the API, so it gets its own
         # much lighter limiter.
         self.cdn_limiter = RateLimiter(0.0 if rate_limit == 0 else CDN_RATE_LIMIT)
+        # One asset lookup serves every kind of art for a game.
+        self._asset_cache: dict[int, dict[str, str]] = {}
 
     def available(self) -> bool:
         return True
+
+    # ── Search ────────────────────────────────────────────────────
+
+    def search(self, title: str, *, allow_editions: bool = False) -> Optional[int]:
+        """Find the appid for a game by name, or None if unsure.
+
+        For PC games that did not arrive through Steam — a Heroic install, a
+        GOG copy, a launcher added by hand — Steam is still much the best
+        source of art, but only once we know the appid.
+
+        Deliberately strict: only an exact match after normalisation is
+        accepted. A fuzzy match here would put Forza Horizon 5's cover on
+        Forza Horizon 6, and wrong art is worse than none — the user cannot
+        tell it is wrong without opening the game.
+        """
+        wanted = normalise_for_match(title)
+        if not wanted:
+            return None
+
+        self.limiter.wait()
+        try:
+            response = self.session.get(
+                SEARCH_API,
+                params={"term": title, "l": "english", "cc": "us"},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            logger.debug("Steam search failed for %r: %s", title, exc)
+            return None
+
+        fallback = None
+
+        for item in payload.get("items") or []:
+            name = item.get("name")
+            appid = item.get("id")
+            if not isinstance(name, str) or not isinstance(appid, int):
+                continue
+
+            found = normalise_for_match(name)
+            if found == wanted:
+                return appid
+
+            # A re-release is the same game wearing a different subtitle, and
+            # its cover is the one the user is looking for. Only whole known
+            # edition words are allowed: a bare prefix match would put Dark
+            # Souls' cover on Dark Souls II.
+            if allow_editions and found.startswith(wanted + " "):
+                suffix = found[len(wanted) + 1:]
+                if all(word in EDITION_WORDS for word in suffix.split()):
+                    fallback = fallback or appid
+
+        return fallback
 
     # ── Metadata ──────────────────────────────────────────────────
 
@@ -144,10 +237,88 @@ class SteamStoreProvider(MetadataProvider):
 
     # ── Artwork ───────────────────────────────────────────────────
 
+    def assets(self, appid: int) -> dict[str, str]:
+        """Every asset Steam holds for an app: asset name -> absolute URL.
+
+        Steam used to serve art from a predictable path — `.../apps/<appid>/
+        library_600x900.jpg` — and GameLab guessed it. That stopped working:
+        apps published in the last few years keep each asset in a
+        content-hashed directory, e.g. `.../apps/2244210/cffacba…bc7/
+        library_capsule.jpg`, where the hash is not derivable from anything we
+        know. Guessing returns 404 for every one of them, which is why recent
+        releases came back with no art at all while older games were fine.
+
+        This asks Steam for the real filenames instead. Results are cached per
+        instance, so fetching a cover, a hero and a logo is one request.
+
+        Returns {} when Steam has nothing or cannot be reached — the caller
+        falls back to the legacy paths, which still work for older apps.
+        """
+        if appid in self._asset_cache:
+            return self._asset_cache[appid]
+
+        request = {
+            "ids": [{"appid": int(appid)}],
+            "context": {"language": "english", "country_code": "US"},
+            "data_request": {"include_assets": True},
+        }
+
+        self.limiter.wait()
+        try:
+            response = self.session.get(
+                STORE_BROWSE_API,
+                params={"input_json": json.dumps(request)},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            # Deliberately not a ProviderError: art is optional, and the legacy
+            # paths are still worth trying.
+            logger.debug("Steam asset lookup failed for %s: %s", appid, exc)
+            return {}
+
+        items = (payload.get("response") or {}).get("store_items") or []
+        assets = (items[0].get("assets") or {}) if items else {}
+
+        # Every filename is relative to this template, which carries the
+        # appid and a cache-busting timestamp.
+        template = assets.get("asset_url_format")
+        resolved: dict[str, str] = {}
+        if isinstance(template, str) and template:
+            for name, filename in assets.items():
+                if name == "asset_url_format" or not isinstance(filename, str):
+                    continue
+                if "." not in filename:
+                    # community_icon is a bare hash with no extension; it is an
+                    # icon rather than artwork and we have no use for it.
+                    continue
+                resolved[name] = ASSET_BASE + template.replace("${FILENAME}", filename)
+
+        self._asset_cache[appid] = resolved
+        return resolved
+
     def artwork_urls(self, appid: int, kind: str) -> tuple[str, ...]:
-        """Candidate URLs for a kind of artwork, best quality first."""
+        """Legacy candidate URLs for a kind of artwork, best quality first.
+
+        Pure and offline. `resolved_artwork_urls` is what callers want.
+        """
         templates = ART_URLS.get(kind, ())
         return tuple(template.format(appid=appid) for template in templates)
+
+    def resolved_artwork_urls(self, appid: int, kind: str) -> tuple[str, ...]:
+        """URLs to try for one kind of art, best first.
+
+        Steam's own answer comes first; the legacy guesses follow, so a game
+        still gets art when the store service is unreachable.
+        """
+        assets = self.assets(appid)
+        live = [
+            assets[name] for name in ASSET_NAMES.get(kind, ())
+            if name in assets
+        ]
+        legacy = [url for url in self.artwork_urls(appid, kind) if url not in live]
+        return tuple(live + legacy)
 
     def download_artwork(self, appid: int, kind: str) -> Optional[bytes]:
         """Download artwork, trying each candidate URL in turn.
@@ -155,7 +326,7 @@ class SteamStoreProvider(MetadataProvider):
         Returns None when Steam has no art of that kind for the game, which is
         common for older titles and is not an error.
         """
-        for url in self.artwork_urls(appid, kind):
+        for url in self.resolved_artwork_urls(appid, kind):
             self.cdn_limiter.wait()
             try:
                 response = self.session.get(url, timeout=REQUEST_TIMEOUT)

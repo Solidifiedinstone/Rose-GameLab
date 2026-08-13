@@ -20,8 +20,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
-from rose_gamelab.core.discs import group_discs, write_m3u
+from rose_gamelab.core import folder_games
+from rose_gamelab.core.discs import (
+    DiscFile,
+    GameGroup,
+    group_discs,
+    normalise_title,
+    write_m3u,
+)
 from rose_gamelab.core.emulator import SYSTEMS, get_system, systems_for_extension
+from rose_gamelab.core.folder_games import FolderGame
 from rose_gamelab.core.hashing import hash_file, should_hash
 from rose_gamelab.core.library import ImportResult, Library
 from rose_gamelab.db.database import utc_now
@@ -48,26 +56,39 @@ class ScanResult:
     files_seen: int = 0
     games_found: int = 0
     playlists_written: int = 0
+    #: Entries deleted because they were files from inside a folder game.
+    debris_removed: int = 0
     imported: ImportResult = field(default_factory=ImportResult)
     errors: list[str] = field(default_factory=list)
 
 
 # ── Walking ───────────────────────────────────────────────────────
 
-def walk_roms(
+def walk_library(
     root: str | Path,
     *,
     extensions: Optional[set[str]] = None,
     recursive: bool = True,
     follow_symlinks: bool = False,
-) -> Iterator[Path]:
-    """Yield candidate ROM files under `root`.
+) -> Iterator[Path | FolderGame]:
+    """Yield everything under `root` that is a game: files, and game folders.
+
+    A directory is checked against the known folder layouts BEFORE being
+    descended into. When it matches it is yielded as one `FolderGame` and its
+    contents are never walked — a PS3 title holds thousands of files with ROM
+    extensions, and every one of them used to arrive as a separate game.
 
     Symlinks are not followed by default: ROM collections frequently contain
     symlinks back into themselves, and following them can loop forever.
     """
     root = Path(root).expanduser()
     if not root.is_dir():
+        return
+
+    # The root itself may be a single game the user pointed at directly.
+    game = folder_games.detect(root)
+    if game is not None:
+        yield game
         return
 
     stack = [root]
@@ -93,11 +114,19 @@ def walk_roms(
         for child in children:
             try:
                 if child.is_dir():
-                    if not recursive:
-                        continue
                     if child.name in SKIP_DIRECTORIES or child.name.startswith("."):
                         continue
                     if child.is_symlink() and not follow_symlinks:
+                        continue
+
+                    # Checked even when not recursing: a folder of PS3 games is
+                    # a flat list of games as far as the user is concerned.
+                    game = folder_games.detect(child)
+                    if game is not None:
+                        yield game
+                        continue
+
+                    if not recursive:
                         continue
                     stack.append(child)
                     continue
@@ -110,6 +139,41 @@ def walk_roms(
                 yield child
             except OSError:
                 continue
+
+
+def walk_roms(
+    root: str | Path,
+    *,
+    extensions: Optional[set[str]] = None,
+    recursive: bool = True,
+    follow_symlinks: bool = False,
+) -> Iterator[Path]:
+    """Yield candidate ROM files under `root`, ignoring folder games.
+
+    The file-only view of `walk_library`, for callers that deal in files.
+    Folder games are still pruned rather than descended into, so their contents
+    never leak out as hundreds of imaginary games.
+    """
+    for found in walk_library(
+        root,
+        extensions=extensions,
+        recursive=recursive,
+        follow_symlinks=follow_symlinks,
+    ):
+        if isinstance(found, Path):
+            yield found
+
+
+def folder_group(game: FolderGame) -> GameGroup:
+    """Present a folder game as a one-'disc' group the library can import.
+
+    The recorded path is the file the emulator is pointed at, not the folder,
+    so launching works without every launcher needing to know about layouts.
+    """
+    return GameGroup(
+        title=normalise_title(game.title),
+        files=[DiscFile(path=game.entry)],
+    )
 
 
 # ── System inference ──────────────────────────────────────────────
@@ -182,11 +246,45 @@ class RomScanner:
             else None
         )
 
-        files = list(walk_roms(root, extensions=extensions, recursive=recursive))
-        result.files_seen = len(files)
+        files: list[Path] = []
+        folders: list[FolderGame] = []
+        for found in walk_library(root, extensions=extensions, recursive=recursive):
+            if isinstance(found, FolderGame):
+                folders.append(found)
+            else:
+                files.append(found)
+
+        result.files_seen = len(files) + len(folders)
 
         if progress:
-            progress(f"Found {len(files)} files in {root.name}")
+            progress(f"Found {len(files) + len(folders)} games in {root.name}")
+
+        # Folder games first: they are already one game each, so they skip
+        # extension filtering and disc grouping entirely.
+        for game in folders:
+            if system and game.system_id != system:
+                # The user declared this folder to be one system and this game
+                # says otherwise. Believe the game — the marker files are the
+                # game's own, not a guess from a filename.
+                logger.debug(
+                    "%s is %s, not the declared %s", game.root, game.system_id, system
+                )
+            result.games_found += 1
+            try:
+                _, outcome = self.library.import_group(
+                    folder_group(game),
+                    system=game.system_id,
+                    source_id=source_id,
+                    emulator=(
+                        get_system(game.system_id).default_core
+                        if get_system(game.system_id) else None
+                    ),
+                )
+                setattr(result.imported, outcome, getattr(result.imported, outcome) + 1)
+                if progress:
+                    progress(f"{outcome}: {game.title}")
+            except Exception as exc:
+                result.imported.errors.append(f"{game.title}: {exc}")
 
         # Group by inferred system first, so disc grouping never merges a PS1
         # rip with a Saturn rip that happens to share a title.
@@ -236,7 +334,61 @@ class RomScanner:
         if source_id:
             self.library.mark_source_scanned(source_id)
 
+        result.debris_removed = self.remove_folder_game_debris()
+
         return result
+
+    # ── Repairing earlier scans ───────────────────────────────────
+
+    def remove_folder_game_debris(self) -> int:
+        """Delete entries that are really files from inside a folder game.
+
+        Before folder layouts were understood, scanning a PS3 collection
+        imported every shader cache and localisation blob inside each game as
+        its own title — forty games arriving as three hundred entries. Those
+        are removed here rather than left for the user to delete by hand.
+
+        Only entries whose file sits inside a folder game AND is not that
+        game's launch file are touched, so a correctly imported game is never
+        mistaken for debris.
+        """
+        seen_roots: dict[str, Optional[FolderGame]] = {}
+        debris: set[int] = set()
+
+        for game_id, title, path in self.library.all_game_files():
+            file_path = Path(path)
+            # Keyed by the containing directory, since every file inside one
+            # game shares it. A game launched FROM a directory is keyed by
+            # itself instead — sharing its parent's answer with its siblings
+            # would report each of them as debris from the first one.
+            key = str(file_path if file_path.is_dir() else file_path.parent)
+
+            if key not in seen_roots:
+                seen_roots[key] = folder_games.game_root_for(file_path)
+            found = seen_roots[key]
+
+            if found is None:
+                continue
+
+            # An entry pointing at the right file can still be wrong: one
+            # imported as "EBOOT" would sit beside the properly named game
+            # forever, since nothing would ever match the two up. Rescanning
+            # re-adds it correctly, so removing it here loses nothing.
+            if file_path == found.entry and title == normalise_title(found.title):
+                continue
+
+            debris.add(game_id)
+
+        # Counted as games, not files: one bogus entry can hold several of a
+        # game's inner files, and the number reported to the user is how many
+        # things vanish from their library.
+        for game_id in debris:
+            self.library.remove_game(game_id)
+
+        if debris:
+            logger.info("removed %d entries from inside folder games", len(debris))
+
+        return len(debris)
 
     # ── Hashing pass ──────────────────────────────────────────────
 
@@ -265,13 +417,16 @@ class RomScanner:
         for index, row in enumerate(rows, start=1):
             path = Path(row["path"])
 
-            if not path.is_file():
+            if not path.exists():
                 self.library.db.execute(
                     "UPDATE game_files SET missing = 1 WHERE id = ?", (row["id"],)
                 )
                 continue
 
-            if not should_hash(path):
+            # A folder game is launched by pointing an emulator at a directory;
+            # there is no single file to hash, and hashing one file from inside
+            # it would identify that file, not the game.
+            if path.is_dir() or not should_hash(path):
                 continue
 
             if progress:
@@ -300,10 +455,13 @@ class RomScanner:
 
         Files are flagged, never deleted: an unplugged external drive should
         grey a game out, not erase its playtime and artwork.
+
+        Existence, not file-ness: some games are launched from a directory, and
+        testing for a file marked every one of them missing.
         """
         missing = 0
         for row in self.library.db.query("SELECT id, path, missing FROM game_files"):
-            gone = not Path(row["path"]).is_file()
+            gone = not Path(row["path"]).exists()
             if gone != bool(row["missing"]):
                 self.library.db.execute(
                     "UPDATE game_files SET missing = ? WHERE id = ?",

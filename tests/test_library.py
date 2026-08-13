@@ -425,3 +425,128 @@ def test_one_bad_entry_does_not_abort_the_import(library):
 
     assert result.added >= 1
     assert library.count() >= 1
+
+
+# ── Removing sources ──────────────────────────────────────────────
+#
+# Removing a source used to keep its games silently, leaving entries that no
+# sidebar row matched and nothing could ever select or delete again.
+
+def test_removing_a_source_can_take_its_games(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    game_id = library.add_game(title="Chrono Trigger", system="snes", source_id="roms")
+    library.add_launch_option(game_id, kind="emulator", target="/roms/ct.sfc")
+
+    removed = library.remove_source("roms", remove_games=True)
+
+    assert removed == 1
+    assert library.count() == 0
+    assert library.get(game_id) is None
+
+
+def test_removing_a_source_can_keep_its_games(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="Chrono Trigger", system="snes", source_id="roms")
+
+    removed = library.remove_source("roms", remove_games=False)
+
+    assert removed == 0
+    assert library.count() == 1
+
+
+def test_games_kept_after_a_source_is_removed_stay_reachable(library):
+    """The bug: no filter matched them, so they could never be found again."""
+    from rose_gamelab.core.library import NO_SOURCE
+
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="Chrono Trigger", system="snes", source_id="roms")
+    library.remove_source("roms")
+
+    assert library.count_orphaned_games() == 1
+    assert [g.title for g in library.list_games(source_id=NO_SOURCE)] == ["Chrono Trigger"]
+
+
+def test_orphaned_games_can_be_cleared(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="Chrono Trigger", system="snes", source_id="roms")
+    library.add_game(title="Half-Life", system="pc", source_id=None)
+    library.remove_source("roms")
+
+    assert library.remove_orphaned_games() == 2
+    assert library.count() == 0
+
+
+def test_counting_games_for_a_source(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.register_source("steam", name="Steam", type="steam")
+    library.add_game(title="A", system="snes", source_id="roms")
+    library.add_game(title="B", system="snes", source_id="roms")
+    library.add_game(title="C", system="pc", source_id="steam")
+
+    assert library.count_games_for_source("roms") == 2
+    assert library.count_games_for_source("steam") == 1
+    assert library.count_games_for_source("nope") == 0
+
+
+def test_removing_a_game_takes_its_files_and_options(library, tmp_path):
+    """Cascades must fire, or the database fills with unreachable rows."""
+    game_id = library.add_game(title="Chrono Trigger", system="snes")
+    library.add_file(game_id, tmp_path / "ct.sfc")
+    library.add_launch_option(game_id, kind="emulator", target=str(tmp_path / "ct.sfc"))
+
+    library.remove_game(game_id)
+
+    assert library.launch_options_for(game_id) == []
+    assert library.all_game_files() == []
+
+
+# ── Bulk removal ──────────────────────────────────────────────────
+
+def test_remove_games_by_system(library):
+    library.add_game(title="Demon's Souls", system="ps3")
+    library.add_game(title="COALESCED_INT", system="ps3")
+    library.add_game(title="Chrono Trigger", system="snes")
+
+    removed = library.remove_games_where(system="ps3")
+
+    assert removed == 2
+    assert [g.title for g in library.list_games()] == ["Chrono Trigger"]
+
+
+def test_remove_games_by_source(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="A", system="snes", source_id="roms")
+    library.add_game(title="B", system="pc")
+
+    assert library.remove_games_where(source_id="roms") == 1
+    assert [g.title for g in library.list_games()] == ["B"]
+
+
+def test_remove_games_by_system_and_source_together(library):
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="A", system="ps3", source_id="roms")
+    library.add_game(title="B", system="snes", source_id="roms")
+
+    assert library.remove_games_where(system="ps3", source_id="roms") == 1
+    assert [g.title for g in library.list_games()] == ["B"]
+
+
+def test_remove_games_with_no_source_filter(library):
+    from rose_gamelab.core.library import NO_SOURCE
+
+    library.register_source("roms", name="ROMs", type="rom_folder")
+    library.add_game(title="Kept", system="snes", source_id="roms")
+    library.add_game(title="Orphan", system="snes")
+
+    assert library.remove_games_where(source_id=NO_SOURCE) == 1
+    assert [g.title for g in library.list_games()] == ["Kept"]
+
+
+def test_removing_games_needs_a_filter(library):
+    """'Delete everything' must never be what happens by passing nothing."""
+    library.add_game(title="A", system="snes")
+
+    with pytest.raises(ValueError):
+        library.remove_games_where()
+
+    assert library.count() == 1

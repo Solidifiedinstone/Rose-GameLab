@@ -36,12 +36,14 @@ class DetailPanel(QFrame):
     launch_requested = Signal(int, object)   # game id, launch option id or None
     favorite_toggled = Signal(int, bool)
     scrape_requested = Signal(int)
+    remove_requested = Signal(int)
 
     def __init__(self, theme: Theme, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
         self.setObjectName("DetailPanel")
         self.theme = theme
+        self._style = None
         self.game = None
         self._launch_options: list = []
 
@@ -121,6 +123,14 @@ class DetailPanel(QFrame):
         self.scrape.clicked.connect(self._on_scrape)
         row.addWidget(self.scrape, 1)
 
+        # Removing a game was previously impossible from the interface, which
+        # left anything wrongly imported in the library permanently.
+        self.remove = QPushButton("🗑")
+        self.remove.setToolTip("Remove from library (keeps the files on disk)")
+        self.remove.setFixedWidth(48)
+        self.remove.clicked.connect(self._on_remove)
+        row.addWidget(self.remove)
+
         outer.addLayout(row)
 
     # ── Content ───────────────────────────────────────────────────
@@ -174,6 +184,13 @@ class DetailPanel(QFrame):
         else:
             self.option_picker.hide()
 
+    def restyle(self, theme: Theme, style=None) -> None:
+        """Adopt a new palette, repainting the one thing that is coloured here."""
+        self.theme = theme
+        self._style = style
+        if self.game is not None:
+            self._set_cover(self.game)
+
     def _set_cover(self, game) -> None:
         if game.cover_path and Path(game.cover_path).is_file():
             pixmap = QPixmap(game.cover_path)
@@ -184,8 +201,9 @@ class DetailPanel(QFrame):
                 return
 
         self.cover.setText("")
+        radius = self._style.radius if getattr(self, "_style", None) else RADIUS
         self.cover.setStyleSheet(
-            f"background-color:{self.theme.placeholder};border-radius:{RADIUS}px;"
+            f"background-color:{self.theme.placeholder};border-radius:{radius}px;"
         )
 
     def _clear_facts(self) -> None:
@@ -238,3 +256,7 @@ class DetailPanel(QFrame):
     def _on_scrape(self) -> None:
         if self.game:
             self.scrape_requested.emit(self.game.id)
+
+    def _on_remove(self) -> None:
+        if self.game:
+            self.remove_requested.emit(self.game.id)

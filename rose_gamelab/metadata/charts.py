@@ -25,7 +25,7 @@ from typing import Optional
 
 import requests
 
-from rose_gamelab.metadata.base import ProviderError
+from rose_gamelab.metadata.base import USER_AGENT, ProviderError
 from rose_gamelab.metadata.steam_store import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ class SteamCharts:
         rate_limit: float = 1.0,
     ) -> None:
         self.session = session or requests.Session()
-        self.session.headers.setdefault("User-Agent", "Rose-GameLab/0.1")
+        self.session.headers["User-Agent"] = USER_AGENT
         self.limiter = RateLimiter(rate_limit)
 
     def most_played(self, *, limit: int = 50) -> Chart:

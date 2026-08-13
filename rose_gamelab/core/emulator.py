@@ -158,9 +158,13 @@ SYSTEMS: dict[str, EmulatorDef] = {
         (".iso", ".chd", ".cso", ".gz", ".bin", ".mdf", ".nrg"),
         "pcsx2", "Sony", 2000, disc_based=True,
     ),
+    # No .bin/.self/.elf: those are files INSIDE a PS3 game, never a game on
+    # their own, and listing them made every shader cache and localisation blob
+    # in a dump look like a title. PS3 dumps are folders — see
+    # core.folder_games — and the loose-file forms are .iso and .pkg.
     "ps3": _system(
         "ps3", "PlayStation 3", "💿",
-        (".iso", ".pkg", ".self", ".elf", ".bin"), "rpcs3", "Sony", 2006,
+        (".iso", ".pkg"), "rpcs3", "Sony", 2006,
         disc_based=True,
     ),
     "ps4": _system(
@@ -168,7 +172,8 @@ SYSTEMS: dict[str, EmulatorDef] = {
     ),
     "psp": _system(
         "psp", "PlayStation Portable", "🎮",
-        (".iso", ".cso", ".pbp", ".chd", ".elf", ".prx"), "ppsspp", "Sony", 2004,
+        # .prx is a PSP shared library, not a game.
+        (".iso", ".cso", ".pbp", ".chd", ".elf"), "ppsspp", "Sony", 2004,
     ),
     "psvita": _system(
         "psvita", "PlayStation Vita", "🎮", (".vpk", ".psvimg"), "vita3k", "Sony", 2011,

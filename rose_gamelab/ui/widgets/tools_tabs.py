@@ -24,7 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from rose_gamelab.ui.theme import SPACING, Theme
+from rose_gamelab.ui import theme as ui_theme
+from rose_gamelab.ui.theme import Theme
 
 
 class SavesTab(QWidget):
@@ -40,7 +41,7 @@ class SavesTab(QWidget):
         self.theme = theme
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(SPACING)
+        layout.setSpacing(ui_theme.SPACING)
 
         intro = QLabel(
             "Saves are found where your emulators keep them and are never moved. "
@@ -173,7 +174,7 @@ class ControllersTab(QWidget):
         self.theme = theme
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(SPACING)
+        layout.setSpacing(ui_theme.SPACING)
 
         intro = QLabel(
             "Configure a controller once and apply it to every emulator, instead "
@@ -272,7 +273,7 @@ class SteamExportTab(QWidget):
         self.theme = theme
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(SPACING)
+        layout.setSpacing(ui_theme.SPACING)
 
         intro = QLabel(
             "Add your emulated and non-Steam games to Steam, with cover art and "

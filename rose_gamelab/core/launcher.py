@@ -98,6 +98,7 @@ def build_command(
     system: Optional[str] = None,
     retroarch_path: Optional[str] = None,
     core_path: Optional[str] = None,
+    silent_steam: bool = False,
 ) -> list[str]:
     """Build the full command line for a launch. Pure function, no side effects.
 
@@ -108,9 +109,21 @@ def build_command(
 
     if kind == "steam":
         # Route through the Steam client so Proton, cloud saves and the overlay
-        # all engage. Launching the executable directly bypasses every one.
+        # all engage. Launching the executable directly bypasses every one —
+        # and for any game using Steamworks DRM it simply fails, because the
+        # game asks a running client to authorise it.
         steam = shutil.which("steam") or "steam"
-        command = [steam, target if target.startswith("steam://") else f"steam://run/{target}"]
+        command = [steam]
+
+        # `-silent` starts the client straight to the tray with no window and
+        # no library UI. The client still runs — that is not optional for most
+        # games — but nothing of it appears on screen.
+        if silent_steam:
+            command.append("-silent")
+
+        command.append(
+            target if target.startswith("steam://") else f"steam://run/{target}"
+        )
         # Steam applies its own launch options; wrappers here would apply to the
         # client, not the game.
         return command
@@ -138,8 +151,14 @@ def build_command(
         # than being exec'd as a file path.
         if "://" in target or target.startswith(("lutris:", "heroic:")):
             command = ["xdg-open", target]
-        else:
+        elif Path(target).is_file():
+            # An executable, whose name may legitimately contain spaces.
             command = [target]
+        else:
+            # A command line rather than a path — desktop entries routinely
+            # carry one, e.g. `env GDK_BACKEND=wayland an-anime-game-launcher`.
+            # Exec'ing that as a single filename fails with "no such file".
+            command = shlex.split(target)
 
     elif kind == "emulator":
         if core_path and retroarch_path:
@@ -176,6 +195,7 @@ class Launcher:
         emulator_paths: Optional[dict[str, str]] = None,
         retroarch_path: Optional[str] = None,
         libretro_core_dir: Optional[str] = None,
+        silent_steam: bool = False,
     ) -> None:
         self.library = library
         self.profiles = profiles
@@ -183,6 +203,8 @@ class Launcher:
         self.emulator_paths = emulator_paths or {}
         self.retroarch_path = retroarch_path
         self.libretro_core_dir = libretro_core_dir
+        # Start the Steam client to the tray instead of opening its window.
+        self.silent_steam = silent_steam
         self.running: dict[int, GameProcess] = {}
 
     # ── Resolution ────────────────────────────────────────────────
@@ -286,6 +308,7 @@ class Launcher:
             system=game.system,
             retroarch_path=self.retroarch_path,
             core_path=self.resolve_core(game.system) if kind == "emulator" else None,
+            silent_steam=self.silent_steam,
         )
 
         env = profile.environment(dict(os.environ))

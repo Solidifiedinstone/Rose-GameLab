@@ -95,6 +95,17 @@ DEFAULT_CONFIG = {
         "auto_import_gog": True,
     },
 
+    # ── Artwork scraping ──────────────────────────────────────────
+    # Steam and the libretro thumbnail archive need no credentials and cover
+    # most of a library between them. SteamGridDB is the fallback for what they
+    # cannot answer — launchers, fan games, storefront exclusives, dumps the
+    # archive lacks — and needs a free key from steamgriddb.com/profile/preferences/api.
+    # STEAMGRIDDB_API_KEY in the environment works too, for anyone who would
+    # rather not write a credential to disk.
+    "steamgriddb": {
+        "api_key": None,
+    },
+
     # ── Game metadata cache ───────────────────────────────────────
     "game_cache": {},                         # game_id -> {cover, metadata, last_played, play_count}
 

@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
 
 from rose_gamelab.core.emulator import get_system
 from rose_gamelab.core.launcher import LaunchError
-from rose_gamelab.ui.theme import COVER_RATIO, RADIUS_LARGE, Theme
+from rose_gamelab.ui import theme as ui_theme
+from rose_gamelab.ui.theme import COVER_RATIO, Theme
 from rose_gamelab.ui.widgets.game_card import load_cover
 
 logger = logging.getLogger(__name__)
@@ -99,7 +100,7 @@ class BigPictureTile(QLabel):
         )
         self.setStyleSheet(
             f"background-color: {self.theme.placeholder};"
-            f"border-radius: {RADIUS_LARGE}px;"
+            f"border-radius: {ui_theme.RADIUS_LARGE}px;"
             f"color: {self.theme.text};"
             f"font-size: 15px; font-weight: 600; padding: 10px;"
             f"{border}"

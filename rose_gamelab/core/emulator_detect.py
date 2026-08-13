@@ -64,32 +64,80 @@ class EmulatorOption:
 # This table is the honest, verifiable part: a system listed here with no
 # candidate installed is reported as missing, with instructions.
 CANDIDATES: dict[str, list[dict]] = {
-    "ps2":        [{"name": "PCSX2", "binaries": ("pcsx2-qt", "pcsx2"), "flatpak": "net.pcsx2.PCSX2", "arch": "pcsx2"}],
-    "ps1":        [{"name": "DuckStation", "binaries": ("duckstation-qt", "duckstation-nogui", "duckstation"), "flatpak": "org.duckstation.DuckStation", "arch": "duckstation"}],
+    # ── Sony ──────────────────────────────────────────────────────
+    "ps1":        [{"name": "DuckStation", "binaries": ("duckstation-qt", "duckstation-nogui", "duckstation"), "flatpak": "org.duckstation.DuckStation", "arch": "duckstation"},
+                   {"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "ps2":        [{"name": "PCSX2", "binaries": ("pcsx2-qt", "pcsx2"), "flatpak": "net.pcsx2.PCSX2", "arch": "pcsx2"},
+                   {"name": "Play!", "binaries": ("Play", "play"), "flatpak": "org.purei.Play", "arch": ""}],
     "ps3":        [{"name": "RPCS3", "binaries": ("rpcs3",), "flatpak": "net.rpcs3.RPCS3", "arch": "rpcs3"}],
+    "ps4":        [{"name": "shadPS4", "binaries": ("shadps4", "shadPS4"), "flatpak": "net.shadps4.shadPS4", "arch": ""}],
     "psp":        [{"name": "PPSSPP", "binaries": ("PPSSPPQt", "PPSSPPSDL", "ppsspp"), "flatpak": "org.ppsspp.PPSSPP", "arch": "ppsspp"}],
-    "psvita":     [{"name": "Vita3K", "binaries": ("Vita3K", "vita3k"), "flatpak": "", "arch": ""}],
-    "ps4":        [{"name": "shadPS4", "binaries": ("shadps4", "shadPS4"), "flatpak": "", "arch": ""}],
+    "psvita":     [{"name": "Vita3K", "binaries": ("Vita3K", "vita3k"), "flatpak": "org.vita3k.Vita3K", "arch": ""}],
+
+    # ── Nintendo: home ────────────────────────────────────────────
+    "nes":        [{"name": "Mesen", "binaries": ("Mesen", "mesen"), "flatpak": "", "arch": ""},
+                   {"name": "FCEUX", "binaries": ("fceux",), "flatpak": "com.fceux.fceux", "arch": "fceux"}],
+    "fds":        [{"name": "Mesen", "binaries": ("Mesen", "mesen"), "flatpak": "", "arch": ""},
+                   {"name": "FCEUX", "binaries": ("fceux",), "flatpak": "com.fceux.fceux", "arch": "fceux"}],
+    "snes":       [{"name": "Snes9x", "binaries": ("snes9x-gtk", "snes9x"), "flatpak": "com.snes9x.Snes9x", "arch": "snes9x-gtk"},
+                   {"name": "bsnes", "binaries": ("bsnes",), "flatpak": "dev.bsnes.bsnes", "arch": "bsnes"}],
+    "n64":        [{"name": "simple64", "binaries": ("simple64-gui",), "flatpak": "io.github.simple64.simple64", "arch": ""},
+                   {"name": "Mupen64Plus", "binaries": ("mupen64plus",), "flatpak": "", "arch": "mupen64plus"}],
     "gc":         [{"name": "Dolphin", "binaries": ("dolphin-emu", "dolphin-emu-nogui"), "flatpak": "org.DolphinEmu.dolphin-emu", "arch": "dolphin-emu"}],
     "wii":        [{"name": "Dolphin", "binaries": ("dolphin-emu", "dolphin-emu-nogui"), "flatpak": "org.DolphinEmu.dolphin-emu", "arch": "dolphin-emu"}],
     "wiiu":       [{"name": "Cemu", "binaries": ("Cemu", "cemu"), "flatpak": "info.cemu.Cemu", "arch": ""}],
     "switch":     [{"name": "Ryujinx", "binaries": ("Ryujinx", "ryujinx"), "flatpak": "", "arch": ""}],
-    "3ds":        [{"name": "Azahar", "binaries": ("azahar", "citra-qt", "citra"), "flatpak": "org.azahar_emu.Azahar", "arch": ""}],
-    "nds":        [{"name": "melonDS", "binaries": ("melonDS", "melonds"), "flatpak": "net.kuribo64.melonDS", "arch": "melonds"}],
+
+    # ── Nintendo: handheld ────────────────────────────────────────
+    "gb":         [{"name": "mGBA", "binaries": ("mgba-qt", "mgba"), "flatpak": "io.mgba.mGBA", "arch": "mgba-qt"},
+                   {"name": "SameBoy", "binaries": ("sameboy",), "flatpak": "", "arch": "sameboy"}],
+    "gbc":        [{"name": "mGBA", "binaries": ("mgba-qt", "mgba"), "flatpak": "io.mgba.mGBA", "arch": "mgba-qt"},
+                   {"name": "SameBoy", "binaries": ("sameboy",), "flatpak": "", "arch": "sameboy"}],
     "gba":        [{"name": "mGBA", "binaries": ("mgba-qt", "mgba"), "flatpak": "io.mgba.mGBA", "arch": "mgba-qt"}],
-    "gbc":        [{"name": "mGBA", "binaries": ("mgba-qt", "mgba"), "flatpak": "io.mgba.mGBA", "arch": "mgba-qt"}],
-    "gb":         [{"name": "mGBA", "binaries": ("mgba-qt", "mgba"), "flatpak": "io.mgba.mGBA", "arch": "mgba-qt"}],
-    "snes":       [{"name": "Snes9x", "binaries": ("snes9x-gtk", "snes9x"), "flatpak": "com.snes9x.Snes9x", "arch": "snes9x-gtk"}],
-    "nes":        [{"name": "Mesen", "binaries": ("Mesen", "mesen"), "flatpak": "", "arch": ""}],
-    "n64":        [{"name": "simple64", "binaries": ("simple64-gui", "mupen64plus"), "flatpak": "io.github.simple64.simple64", "arch": "mupen64plus"}],
-    "dreamcast":  [{"name": "Flycast", "binaries": ("flycast",), "flatpak": "org.flycast.Flycast", "arch": ""}],
-    "saturn":     [{"name": "Flycast", "binaries": ("flycast",), "flatpak": "org.flycast.Flycast", "arch": ""}],
+    "nds":        [{"name": "melonDS", "binaries": ("melonDS", "melonds"), "flatpak": "net.kuribo64.melonDS", "arch": "melonds"},
+                   {"name": "DeSmuME", "binaries": ("desmume",), "flatpak": "org.desmume.DeSmuME", "arch": "desmume"}],
+    "3ds":        [{"name": "Azahar", "binaries": ("azahar", "citra-qt", "citra"), "flatpak": "org.azahar_emu.Azahar", "arch": ""}],
+    "virtualboy": [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+
+    # ── Sega ──────────────────────────────────────────────────────
+    "master_system": [{"name": "Kega Fusion", "binaries": ("Fusion", "fusion"), "flatpak": "", "arch": ""},
+                      {"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "gamegear":   [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "megadrive":  [{"name": "BlastEm", "binaries": ("blastem",), "flatpak": "", "arch": "blastem"},
+                   {"name": "Kega Fusion", "binaries": ("Fusion", "fusion"), "flatpak": "", "arch": ""}],
+    "segacd":     [{"name": "Kega Fusion", "binaries": ("Fusion", "fusion"), "flatpak": "", "arch": ""}],
+    "sega32x":    [{"name": "Kega Fusion", "binaries": ("Fusion", "fusion"), "flatpak": "", "arch": ""}],
+    "saturn":     [{"name": "Yabause", "binaries": ("yabause", "kronos"), "flatpak": "", "arch": ""},
+                   {"name": "Flycast", "binaries": ("flycast",), "flatpak": "org.flycast.Flycast", "arch": ""}],
+    "dreamcast":  [{"name": "Flycast", "binaries": ("flycast",), "flatpak": "org.flycast.Flycast", "arch": ""},
+                   {"name": "Redream", "binaries": ("redream",), "flatpak": "io.github.redream.Redream", "arch": ""}],
+
+    # ── Microsoft ─────────────────────────────────────────────────
     "xbox":       [{"name": "xemu", "binaries": ("xemu",), "flatpak": "app.xemu.xemu", "arch": "xemu"}],
-    "xbox360":    [{"name": "Xenia", "binaries": ("xenia",), "flatpak": "", "arch": ""}],
-    "megadrive":  [{"name": "BlastEm", "binaries": ("blastem",), "flatpak": "", "arch": "blastem"}],
+    "xbox360":    [{"name": "Xenia", "binaries": ("xenia", "xenia_canary"), "flatpak": "", "arch": ""}],
+
+    # ── Other consoles ────────────────────────────────────────────
     "atari2600":  [{"name": "Stella", "binaries": ("stella",), "flatpak": "io.github.stella_emu.Stella", "arch": "stella"}],
-    "arcade":     [{"name": "MAME", "binaries": ("mame",), "flatpak": "org.mamedev.MAME", "arch": "mame"}],
-    "dos":        [{"name": "DOSBox Staging", "binaries": ("dosbox-staging", "dosbox"), "flatpak": "io.github.dosbox-staging", "arch": "dosbox-staging"}],
+    "atari7800":  [{"name": "Stella", "binaries": ("stella",), "flatpak": "io.github.stella_emu.Stella", "arch": "stella"}],
+    "lynx":       [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "jaguar":     [{"name": "BigPEmu", "binaries": ("bigpemu",), "flatpak": "", "arch": ""}],
+    "pc_engine":  [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "pc_engine_cd": [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "neogeo":     [{"name": "MAME", "binaries": ("mame",), "flatpak": "org.mamedev.MAME", "arch": "mame"},
+                   {"name": "FinalBurn Neo", "binaries": ("fbneo",), "flatpak": "", "arch": ""}],
+    "ngp":        [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "wonderswan": [{"name": "Mednafen", "binaries": ("mednafen",), "flatpak": "", "arch": "mednafen"}],
+    "3do":        [{"name": "Phoenix", "binaries": ("phoenix",), "flatpak": "", "arch": ""}],
+
+    # ── Arcade and computers ──────────────────────────────────────
+    "arcade":     [{"name": "MAME", "binaries": ("mame",), "flatpak": "org.mamedev.MAME", "arch": "mame"},
+                   {"name": "FinalBurn Neo", "binaries": ("fbneo",), "flatpak": "", "arch": ""}],
+    "msx":        [{"name": "openMSX", "binaries": ("openmsx",), "flatpak": "org.openmsx.openMSX", "arch": "openmsx"},
+                   {"name": "blueMSX", "binaries": ("bluemsx",), "flatpak": "", "arch": ""}],
+    "c64":        [{"name": "VICE", "binaries": ("x64sc", "x64"), "flatpak": "net.sf.VICE", "arch": "vice"}],
+    "amiga":      [{"name": "FS-UAE", "binaries": ("fs-uae-launcher", "fs-uae"), "flatpak": "net.fsuae.FSUAE", "arch": "fs-uae"}],
+    "dos":        [{"name": "DOSBox Staging", "binaries": ("dosbox-staging", "dosbox"), "flatpak": "io.github.dosbox-staging", "arch": "dosbox-staging"},
+                   {"name": "DOSBox-X", "binaries": ("dosbox-x",), "flatpak": "com.dosbox_x.DOSBox-X", "arch": "dosbox-x"}],
     "scummvm":    [{"name": "ScummVM", "binaries": ("scummvm",), "flatpak": "org.scummvm.ScummVM", "arch": "scummvm"}],
 }
 

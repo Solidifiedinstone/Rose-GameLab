@@ -56,6 +56,10 @@ class Game:
     play_count: int = 0
     last_played: Optional[str] = None
     added_at: str = ""
+    #: Whatever the user wants to remember about this game. Never scraped.
+    notes: Optional[str] = None
+    #: Art chosen by hand, which a rescrape must not overwrite.
+    cover_locked: bool = False
 
     @property
     def playtime_hours(self) -> float:
@@ -88,6 +92,8 @@ class Game:
             play_count=row["play_count"] if "play_count" in keys else 0,
             last_played=row["last_played"] if "last_played" in keys else None,
             added_at=row["added_at"] if "added_at" in keys else "",
+            notes=row["notes"] if "notes" in keys else None,
+            cover_locked=bool(row["cover_locked"]) if "cover_locked" in keys else False,
         )
 
 
@@ -104,6 +110,13 @@ class ImportResult:
     @property
     def total_seen(self) -> int:
         return self.added + self.merged + self.updated + self.skipped
+
+
+#: Filter value for games whose source no longer exists. Removing a source
+#: leaves its games behind with a null source_id, and they need to stay
+#: reachable — otherwise they are in the library forever with no way to select
+#: or delete them.
+NO_SOURCE = "__none__"
 
 
 class Library:
@@ -133,6 +146,7 @@ class Library:
         tag: Optional[str] = None,
         favorites_only: bool = False,
         include_hidden: bool = False,
+        hidden_only: bool = False,
         search: Optional[str] = None,
         sort: str = "title",
         descending: bool = False,
@@ -148,12 +162,21 @@ class Library:
         params: list[Any] = []
         joins = ""
 
-        if not include_hidden:
+        if hidden_only:
+            # The only way back to a game that was hidden. Without it, hiding
+            # one removes it from every view permanently.
+            where.append("g.hidden = 1")
+        elif not include_hidden:
             where.append("g.hidden = 0")
         if system:
             where.append("g.system = ?")
             params.append(system)
-        if source_id:
+        if source_id == NO_SOURCE:
+            # Games whose source was removed. Without a way to list these they
+            # are unreachable: no sidebar entry matches them, so they can never
+            # be found, filtered or deleted again.
+            where.append("g.source_id IS NULL")
+        elif source_id:
             where.append("g.source_id = ?")
             params.append(source_id)
         if favorites_only:
@@ -400,7 +423,7 @@ class Library:
             "title", "system", "summary", "release_date", "developer",
             "publisher", "rating", "rating_count", "rating_source", "igdb_id",
             "steam_appid", "cover_path", "hero_path", "logo_path", "hidden",
-            "favorite", "metadata_locked", "source_id",
+            "favorite", "metadata_locked", "cover_locked", "notes", "source_id",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -429,6 +452,21 @@ class Library:
     def remove_game(self, game_id: int) -> None:
         """Remove a game from the library. Never touches files on disk."""
         self.db.execute("DELETE FROM games WHERE id = ?", (game_id,))
+
+    def all_game_files(self) -> list[tuple[int, str, str]]:
+        """Every (game id, title, file path) in the library.
+
+        Used by maintenance passes that need to re-examine what was imported
+        earlier against rules that did not exist at the time.
+        """
+        return [
+            (row["game_id"], row["title"], row["path"])
+            for row in self.db.query(
+                "SELECT f.game_id, g.title, f.path FROM game_files f"
+                " JOIN games g ON g.id = f.game_id"
+                " WHERE f.missing = 0"
+            )
+        ]
 
     # ── Importing ─────────────────────────────────────────────────
 
@@ -597,6 +635,58 @@ class Library:
 
         return seconds
 
+    def play_history(self, game_id: int, *, days: int = 90) -> list[tuple[str, int]]:
+        """(date, seconds) for each day this game was played, oldest first.
+
+        Sessions are already recorded per launch; this is the only place that
+        reads them back, which is what turns "12 hours played" into a picture of
+        when those hours happened.
+        """
+        rows = self.db.query(
+            """
+            SELECT substr(started_at, 1, 10) AS day, SUM(seconds) AS seconds
+              FROM play_sessions
+             WHERE game_id = ? AND ended_at IS NOT NULL
+               AND started_at >= date('now', ?)
+             GROUP BY day
+             ORDER BY day
+            """,
+            (game_id, f"-{int(days)} days"),
+        )
+        return [(row["day"], int(row["seconds"] or 0)) for row in rows]
+
+    def recently_played(self, *, limit: int = 12) -> list[Game]:
+        """Games with a last-played time, most recent first.
+
+        Separate from `list_games(sort='last_played')` because that returns
+        never-played games too, padding out a shelf whose whole purpose is
+        picking up where you left off.
+        """
+        rows = self.db.query(
+            "SELECT * FROM games WHERE hidden = 0 AND last_played IS NOT NULL"
+            " ORDER BY last_played DESC LIMIT ?",
+            (int(limit),),
+        )
+        return [Game.from_row(row) for row in rows]
+
+    def collections_for(self, game_id: int) -> list[int]:
+        """Which collections a game is in."""
+        return [
+            row["collection_id"] for row in self.db.query(
+                "SELECT collection_id FROM collection_games WHERE game_id = ?",
+                (game_id,),
+            )
+        ]
+
+    def rename_collection(self, collection_id: int, name: str) -> None:
+        self.db.execute(
+            "UPDATE collections SET name = ? WHERE id = ?", (name, collection_id)
+        )
+
+    def delete_collection(self, collection_id: int) -> None:
+        """Remove a collection. The games in it are untouched."""
+        self.db.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+
     # ── Collections and tags ──────────────────────────────────────
 
     def create_collection(self, name: str, *, icon: Optional[str] = None) -> int:
@@ -691,12 +781,82 @@ class Library:
             "UPDATE sources SET scanned_at = ? WHERE id = ?", (utc_now(), source_id)
         )
 
-    def remove_source(self, source_id: str, *, remove_games: bool = False) -> None:
-        """Remove a source. By default its games stay in the library.
+    def count_games_for_source(self, source_id: str) -> int:
+        """How many games came from one source. Asked before removing it."""
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS n FROM games WHERE source_id = ?", (source_id,)
+        )
+        return int(row["n"]) if row else 0
 
-        Deleting a source is usually reconfiguration, not a request to lose
-        playtime and artwork, so games are kept unless explicitly asked.
+    def count_orphaned_games(self) -> int:
+        """Games left behind by a source that was removed."""
+        row = self.db.query_one(
+            "SELECT COUNT(*) AS n FROM games WHERE source_id IS NULL"
+        )
+        return int(row["n"]) if row else 0
+
+    def remove_source(self, source_id: str, *, remove_games: bool = False) -> int:
+        """Remove a source, and its games when asked. Returns games removed.
+
+        Keeping the games is a real choice — playtime, favourites and artwork
+        live on the game, not the source — but it must be a choice the user
+        makes knowingly, because the games that stay behind have no source and
+        can only be found through the 'no source' filter afterwards.
+
+        Deleting games cascades to their files, launch options and play
+        sessions. Nothing on disk is touched either way.
         """
+        removed = 0
+
         if remove_games:
+            removed = self.count_games_for_source(source_id)
             self.db.execute("DELETE FROM games WHERE source_id = ?", (source_id,))
+
         self.db.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+        return removed
+
+    def remove_orphaned_games(self) -> int:
+        """Delete every game whose source is gone. Returns how many."""
+        removed = self.count_orphaned_games()
+        self.db.execute("DELETE FROM games WHERE source_id IS NULL")
+        return removed
+
+    def remove_games_where(
+        self,
+        *,
+        system: Optional[str] = None,
+        source_id: Optional[str] = None,
+    ) -> int:
+        """Delete every game matching a system and/or source. Returns how many.
+
+        Refuses to run with no filter at all: "delete everything" is not
+        something to arrive at by passing no arguments, and a caller that
+        really wants it can ask for it explicitly.
+
+        Files on disk are never touched. Cascades take the games' files,
+        launch options and play sessions with them.
+        """
+        if system is None and source_id is None:
+            raise ValueError("Removing games needs a system or a source.")
+
+        where, params = [], []
+
+        if system is not None:
+            where.append("system = ?")
+            params.append(system)
+
+        if source_id == NO_SOURCE:
+            where.append("source_id IS NULL")
+        elif source_id is not None:
+            where.append("source_id = ?")
+            params.append(source_id)
+
+        clause = " AND ".join(where)
+
+        row = self.db.query_one(
+            f"SELECT COUNT(*) AS n FROM games WHERE {clause}", tuple(params)
+        )
+        removed = int(row["n"]) if row else 0
+
+        self.db.execute(f"DELETE FROM games WHERE {clause}", tuple(params))
+        return removed

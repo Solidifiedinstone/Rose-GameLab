@@ -616,3 +616,49 @@ def test_achievements_require_a_real_game(db):
             "INSERT INTO achievements (game_id, ra_id, title) VALUES (?, ?, ?)",
             (9999, 1, "Orphan"),
         )
+
+
+# ── Matching without a hash ───────────────────────────────────────
+
+def test_titles_are_normalised_before_matching():
+    """A ROM filename and RetroAchievements rarely spell a game the same way."""
+    from rose_gamelab.metadata.retroachievements import normalise_title
+
+    assert normalise_title("Final Fantasy X (USA)") == "final fantasy x"
+    assert normalise_title("Grand Theft Auto - San Andreas (Disc 1)") == \
+        "grand theft auto san andreas"
+    assert normalise_title("The Legend of Zelda [!]") == "legend of zelda"
+    assert normalise_title("Sonic & Knuckles") == "sonic and knuckles"
+
+
+def test_a_game_can_be_found_by_title():
+    """PS2 cannot be hashed here, and it is most of a modern library."""
+    session = FakeSession()
+    session.route("API_GetGameList.php", FakeResponse(payload=[
+        {"ID": 111, "Title": "Baldur's Gate: Dark Alliance"},
+        {"ID": 222, "Title": "Dragon Quest VIII: Journey of the Cursed King"},
+    ]))
+    provider = RetroAchievementsProvider("user", "key", session=session, rate_limit=0)
+
+    assert provider.find_game_by_title(21, "Baldur's Gate - Dark Alliance") == 111
+
+
+def test_a_near_miss_is_refused_rather_than_guessed():
+    """Another game's achievements would be worse than none."""
+    session = FakeSession()
+    session.route("API_GetGameList.php", FakeResponse(payload=[
+        {"ID": 111, "Title": "Completely Different Game"},
+    ]))
+    provider = RetroAchievementsProvider("user", "key", session=session, rate_limit=0)
+
+    assert provider.find_game_by_title(21, "Baldur's Gate - Dark Alliance") is None
+
+
+def test_systems_retroachievements_does_not_cover_are_known():
+    """So the interface can say so instead of offering a pointless Refresh."""
+    from rose_gamelab.metadata.retroachievements import on_retroachievements
+
+    assert on_retroachievements("ps2")
+    assert on_retroachievements("snes")
+    assert not on_retroachievements("ps3")
+    assert not on_retroachievements("pc")
