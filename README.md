@@ -43,6 +43,18 @@ sending an AI-generated PR. My goal is to actually learn and own this
 codebase as I keep improving at Python, and eventually replace all of it
 with code written by hand - mine or a human contributor's.
 
+## Expect bugs
+
+This is early software and it will break on things I have not seen. My own
+library is PS2, PS3 and Steam on Arch - your emulators, your distribution and
+your dumps are all different, and that is exactly where it will fall over.
+
+**Please post anything that goes wrong in the
+[Issues tab](https://github.com/Solidifiedinstone/Rose-GameLab/issues).** Run it
+from a terminal and paste what it printed, say which distribution and which
+system the game was for, and I will fix it. A bug nobody reports is a bug that
+stays.
+
 ## Principles
 
 - **No telemetry.** Nothing is measured, collected, or phoned home. Ever.
