@@ -85,8 +85,16 @@ stays.
 **Playing them**
 - Per-game launch profiles — Proton version, Gamescope, MangoHud, gamemode,
   environment variables, custom arguments — with a configurable default
-- One controller configuration exported to every emulator at once
-- Big Picture mode: fullscreen, high-contrast, fully gamepad-navigable
+- **Controllers bind themselves.** Plug a pad in and it is recognised against
+  the community mapping database — including retro pads on Raphnet, Mayflash
+  and 8BitDo adapters — then handed to every SDL-based emulator at once, so
+  PCSX2, DuckStation, Dolphin, PPSSPP, RPCS3, Ryujinx and RetroArch all agree
+  about which button is which without configuring any of them
+- Per-game controller overrides and player order, so the arcade stick drives
+  arcade games and you decide who is player one
+- Battery and connection status for pads and wireless peripherals, in both the
+  desktop window and Big Picture
+- Big Picture mode: fullscreen, high-contrast, keyboard and mouse navigable
 - Playtime tracking. Launches that hand off to another client (Steam, Heroic,
   Lutris) are marked untracked rather than recording a wrong number
 - RetroAchievements support (needs your own RetroAchievements API key)
@@ -96,7 +104,11 @@ stays.
   never moved, backed up as plain folders you can read without GameLab
 - Export to Steam as non-Steam shortcuts, with cover art and library categories
 - Library import/export so you can move machines or share a curated set
-
+- **ROM health check** — verify your dumps against No-Intro and Redump
+  catalogues and find the bad ones before they fail three hours in
+  (`rose-gamelab verify`; you supply the DAT files)
+- An in-game panel on Shift+Tab: screenshots, saves, achievements and pad
+  battery over a running game
 - Rip a CD or DVD to a `.bin`/`.cue` or `.iso` and add it to the library, and
   burn your own DRM-free images back to disc with a read-back verification pass
 
@@ -108,6 +120,12 @@ wrong config or format costs you more than none at all:
 - Controller exporters exist for RetroArch, SDL, DuckStation and PCSX2. Other
   emulators read gamepads through SDL, so the SDL mapping already covers their
   button layout — see `core/controller.py` for what was verified and how.
+- Player order is applied where a format can express it (RetroArch takes an
+  explicit joypad index). SDL emulators enumerate pads in kernel order and
+  offer no way to reorder them, so for those it is recorded, not faked.
+- The in-game panel is a window above the game, not a layer drawn inside it —
+  GameLab hooks no renderers. It will not appear in a fullscreen-exclusive
+  capture. That is inherent to the approach rather than a bug to be fixed.
 - RetroAchievements hashing is implemented for the cartridge systems whose
   algorithm could be verified; the rest raise a named error.
 - The rip and burn command lines have never been run against real hardware
@@ -273,7 +291,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1040 tests, none of which touch the network or require a controller, an optical
+1251 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing
