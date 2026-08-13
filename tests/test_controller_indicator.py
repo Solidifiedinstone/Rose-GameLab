@@ -56,18 +56,31 @@ def test_a_battery_percentage_is_shown():
     assert "64%" in describe([status(percent=64)])
 
 
-def test_several_pads_show_a_count_and_the_lowest_battery():
-    """Two full readouts would overflow a status bar, and the pad about to die
-    is the one that matters."""
+def test_two_devices_are_both_named():
+    """There is room for two; naming them beats an anonymous count."""
     text = describe([status(percent=90), status(name="Xbox", percent=15)])
 
-    assert "2 controllers" in text
+    assert "PS4 Controller" in text
+    assert "Xbox" in text
+
+
+def test_several_pads_show_a_count_and_the_lowest_battery():
+    """Three full readouts would overflow a status bar, and the pad about to
+    die is the one worth the space."""
+    text = describe([
+        status(percent=90),
+        status(name="Xbox", percent=15),
+        status(name="Switch", percent=60),
+    ])
+
+    assert "3 controllers" in text
     assert "15%" in text
     assert "90%" not in text
 
 
 def test_several_pads_without_batteries_just_count():
-    assert describe([status(), status(name="Xbox")]) == "🎮 2 controllers"
+    text = describe([status(), status(name="Xbox"), status(name="Switch")])
+    assert text == "🎮 3 controllers"
 
 
 def test_charging_has_its_own_glyph():
@@ -122,3 +135,49 @@ def test_a_low_but_charging_battery_is_not_a_warning(qt_app):
     indicator.set_statuses([status(percent=9, charging=True)])
 
     assert theme.warning not in indicator.styleSheet()
+
+
+# ── Mixed devices ─────────────────────────────────────────────────
+
+def peripheral_status(kind, name, percent=None):
+    from rose_gamelab.core.controller import InputDevice
+    from rose_gamelab.core.controller_status import Battery, ControllerStatus
+
+    return ControllerStatus(
+        device=InputDevice(name=name, vendor_id=1, product_id=2, bustype=3, version=1),
+        name=name, recognised=False,
+        battery=Battery(percent=percent, status="Unknown") if percent else None,
+        wireless=True, kind=kind,
+    )
+
+
+def test_a_mouse_is_not_drawn_as_a_gamepad():
+    """A mouse with a controller icon is worse than no icon at all."""
+    text = describe([peripheral_status("mouse", "G502 X LS", 86)])
+
+    assert "🖱" in text
+    assert "🎮" not in text
+    assert "86%" in text
+
+
+def test_a_keyboard_has_its_own_glyph():
+    assert "⌨" in describe([peripheral_status("keyboard", "MX Keys", 40)])
+
+
+def test_a_pad_and_a_mouse_are_both_named():
+    text = describe([status(percent=70), peripheral_status("mouse", "G502", 86)])
+
+    assert "🎮" in text
+    assert "🖱" in text
+
+
+def test_many_devices_count_only_the_pads():
+    """The count is about controllers; a mouse is not a player."""
+    text = describe([
+        status(name="P1", percent=90),
+        status(name="P2", percent=80),
+        peripheral_status("mouse", "G502", 15),
+    ])
+
+    assert "2 controllers" in text
+    assert "15%" in text     # the lowest, whatever it belongs to

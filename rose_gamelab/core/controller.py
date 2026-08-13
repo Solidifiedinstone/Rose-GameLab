@@ -110,6 +110,35 @@ class InputDevice:
         return self.joystick_path is not None
 
     @property
+    def is_mouse(self) -> bool:
+        """Whether the kernel bound a mouse node to this device.
+
+        Same reasoning as `is_gamepad`: `mouseN` comes from the kernel's own
+        classification of the capability bits, not from the device's name.
+        """
+        return any(re.fullmatch(r"mouse\d+", handler) for handler in self.handlers)
+
+    @property
+    def is_keyboard(self) -> bool:
+        return "kbd" in self.handlers
+
+    @property
+    def kind(self) -> str:
+        """'gamepad' | 'mouse' | 'keyboard' | 'input'.
+
+        A gamepad wins over the others: several pads also present a keyboard
+        node for their guide button, and reporting a controller as a keyboard
+        because of it would be absurd.
+        """
+        if self.is_gamepad:
+            return "gamepad"
+        if self.is_mouse:
+            return "mouse"
+        if self.is_keyboard:
+            return "keyboard"
+        return "input"
+
+    @property
     def controller_type(self) -> ControllerType:
         return identify_controller(self.vendor_id, self.product_id, self.name)
 

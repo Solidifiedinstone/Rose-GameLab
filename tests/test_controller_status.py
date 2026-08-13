@@ -31,6 +31,7 @@ def make_device(sysfs_path="devices/pci/usb1/0003:054C:09CC.0003/input/input17",
     defaults = dict(
         name="Wireless Controller", vendor_id=0x054C, product_id=0x09CC,
         bustype=0x0003, version=0x0100, sysfs="/" + sysfs_path,
+        handlers=frozenset({"event20", "js0"}),
     )
     defaults.update(kwargs)
     return InputDevice(**defaults)
@@ -217,3 +218,94 @@ def test_fingerprint_is_stable_when_nothing_changes(sysfs):
     give_battery(sysfs, device)
 
     assert fingerprint([status_for(device)]) == fingerprint([status_for(device)])
+
+
+# ── Peripherals with batteries ────────────────────────────────────
+#
+# A wireless mouse dying twenty minutes into a game interrupts play exactly as
+# much as a pad dying. It is shown for that reason and no other — it must never
+# be configured as if it were a controller.
+
+def peripheral(kind="mouse", name="Logitech G502 X LS", **kwargs):
+    handlers = {"mouse": frozenset({"event17", "mouse0"}),
+                "keyboard": frozenset({"event15", "kbd"}),
+                "gamepad": frozenset({"event20", "js0"})}[kind]
+    return make_device(handlers=handlers, name=name, **kwargs)
+
+
+def test_a_mouse_is_classified_as_a_mouse(sysfs):
+    assert peripheral("mouse").kind == "mouse"
+    assert peripheral("keyboard").kind == "keyboard"
+    assert peripheral("gamepad").kind == "gamepad"
+
+
+def test_a_pad_that_also_reports_a_keyboard_is_still_a_pad(sysfs):
+    """Several pads present a keyboard node for their guide button."""
+    device = make_device(handlers=frozenset({"event20", "js0", "kbd"}))
+    assert device.kind == "gamepad"
+
+
+def test_a_mouse_with_a_battery_is_shown(sysfs, monkeypatch):
+    device = peripheral("mouse")
+    give_battery(sysfs, device, capacity="86", status="Unknown")
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: [device])
+
+    shown = controller_status.battery_snapshot()
+
+    assert len(shown) == 1
+    assert shown[0].kind == "mouse"
+    assert shown[0].battery.percent == 86
+
+
+def test_a_wired_mouse_is_not_shown(sysfs, monkeypatch):
+    """A mouse with no battery is not news."""
+    device = peripheral("mouse")
+    (sysfs / device.sysfs.lstrip("/")).mkdir(parents=True)
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: [device])
+
+    assert controller_status.battery_snapshot() == []
+
+
+def test_a_pad_is_shown_even_with_no_battery(sysfs, monkeypatch):
+    """Which controller is connected is itself the useful fact."""
+    device = peripheral("gamepad")
+    (sysfs / device.sysfs.lstrip("/")).mkdir(parents=True)
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: [device])
+
+    assert len(controller_status.battery_snapshot()) == 1
+
+
+def test_one_mouse_is_reported_once(sysfs, monkeypatch):
+    """A physical mouse publishes several input nodes sharing one battery."""
+    nodes = [
+        peripheral("mouse", sysfs_path=f"devices/usb1/0003:046D:C547.000{n}/input/input{n}")
+        for n in range(3)
+    ]
+    for node in nodes:
+        give_battery(sysfs, node, capacity="86")
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: nodes)
+
+    assert len(controller_status.battery_snapshot()) == 1
+
+
+def test_a_mouse_is_never_handed_to_a_game(sysfs, monkeypatch):
+    """The invariant that matters: mice are shown, never configured."""
+    mouse = peripheral("mouse")
+    give_battery(sysfs, mouse, capacity="86")
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: [mouse])
+    monkeypatch.setattr(controller_status, "detect_controllers", list)
+
+    assert controller_status.battery_snapshot()      # shown
+    assert controller_status.snapshot() == []        # not configured
+
+
+def test_a_peripheral_is_not_looked_up_in_the_controller_database(sysfs):
+    """There is no button layout for a mouse; its own name is what to show."""
+    device = peripheral("mouse", name="Logitech G502 X LS")
+    give_battery(sysfs, device)
+
+    status = status_for(device)
+
+    assert status.name == "Logitech G502 X LS"
+    assert not status.recognised
+    assert not status.is_gamepad

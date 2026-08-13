@@ -34,6 +34,7 @@ from rose_gamelab.core.controller import (
     ControllerDetectionError,
     InputDevice,
     detect_controllers,
+    read_input_devices,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class Battery:
 
 @dataclass(frozen=True)
 class ControllerStatus:
-    """One connected pad, as the interface needs to show it."""
+    """One connected device, as the interface needs to show it."""
 
     device: InputDevice
     #: The pad's identity — from the community database where it is known.
@@ -88,6 +89,14 @@ class ControllerStatus:
     recognised: bool
     battery: Optional[Battery]
     wireless: bool
+    #: 'gamepad' | 'mouse' | 'keyboard'. Only gamepads are ever configured for
+    #: a game; the others appear solely because a flat battery interrupts play
+    #: exactly as much as a flat pad does.
+    kind: str = "gamepad"
+
+    @property
+    def is_gamepad(self) -> bool:
+        return self.kind == "gamepad"
 
     @property
     def label(self) -> str:
@@ -163,20 +172,31 @@ def battery_for(device: InputDevice) -> Optional[Battery]:
 
 
 def status_for(device: InputDevice) -> ControllerStatus:
-    """Identify one pad and read its charge."""
-    resolution = controller_db.resolve(device)
+    """Identify one device and read its charge."""
+    if device.is_gamepad:
+        resolution = controller_db.resolve(device)
+        name, recognised = resolution.name, resolution.recognised
+    else:
+        # Nothing to look up: the community database catalogues pads, and a
+        # mouse has no button layout anyone needs mapped. Its own name is the
+        # only useful thing to show.
+        name, recognised = device.name, False
 
     return ControllerStatus(
         device=device,
-        name=resolution.name,
-        recognised=resolution.recognised,
+        name=name,
+        recognised=recognised,
         battery=battery_for(device),
         wireless=device.bustype == BUS_BLUETOOTH,
+        kind=device.kind,
     )
 
 
 def snapshot() -> list[ControllerStatus]:
     """Every pad connected right now.
+
+    Gamepads only. This is what decides what a launched game is told about, so
+    a mouse must never appear in it.
 
     Returns an empty list when detection fails, rather than raising: this is
     called on a timer to keep an indicator up to date, and an unreadable
@@ -189,6 +209,52 @@ def snapshot() -> list[ControllerStatus]:
         return []
 
     return [status_for(device) for device in devices]
+
+
+def battery_snapshot() -> list[ControllerStatus]:
+    """Everything worth showing a battery for: pads, and wireless peripherals.
+
+    Pads appear whether or not they have a battery, because which controller is
+    connected is itself the useful fact. A mouse or keyboard appears only when
+    it actually reports charge — a wired keyboard is not news, but a wireless
+    mouse dying twenty minutes into a game is exactly as disruptive as a pad
+    dying, and a launcher that knows can say so.
+
+    Deliberately separate from `snapshot()`. Nothing here is ever handed to a
+    game: mice are shown, never configured.
+    """
+    try:
+        devices = read_input_devices()
+    except (ControllerDetectionError, OSError):
+        logger.exception("could not enumerate input devices")
+        return []
+
+    statuses: list[ControllerStatus] = []
+    seen: set[str] = set()
+
+    for device in devices:
+        if device.is_gamepad:
+            statuses.append(status_for(device))
+            continue
+
+        if device.kind not in ("mouse", "keyboard"):
+            continue
+
+        battery = battery_for(device)
+        if battery is None or battery.percent is None:
+            continue
+
+        # One physical peripheral publishes several input nodes — a mouse
+        # typically has three — all sharing the battery. Reporting it once per
+        # node would show the same mouse three times.
+        identity = f"{device.vendor_id:04x}:{device.product_id:04x}:{device.name}"
+        if identity in seen:
+            continue
+        seen.add(identity)
+
+        statuses.append(status_for(device))
+
+    return statuses
 
 
 def fingerprint(statuses: list[ControllerStatus]) -> tuple:

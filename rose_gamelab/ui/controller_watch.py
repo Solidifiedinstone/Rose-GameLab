@@ -106,8 +106,11 @@ class ControllerWatcher(QObject):
         self._settle.start()
 
     def refresh(self) -> None:
-        """Re-read the connected pads and emit what changed."""
-        statuses = controller_status.snapshot()
+        """Re-read the connected devices and emit what changed."""
+        # The wider snapshot: pads, plus any wireless peripheral reporting a
+        # battery. Only what this returns is displayed — what a *game* is told
+        # about still comes from `snapshot()`, which is pads alone.
+        statuses = controller_status.battery_snapshot()
         fingerprint = controller_status.fingerprint(statuses)
 
         if fingerprint == self._fingerprint:

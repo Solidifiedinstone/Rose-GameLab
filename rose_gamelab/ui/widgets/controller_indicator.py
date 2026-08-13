@@ -36,32 +36,46 @@ def battery_glyph(percent: Optional[int], charging: Optional[bool]) -> str:
     return "🪫"
 
 
-def describe(statuses: list[ControllerStatus]) -> str:
-    """One line for however many pads are connected.
+#: What each kind of device is drawn as. A mouse shown with a gamepad icon is
+#: worse than no icon at all.
+KIND_GLYPHS = {"gamepad": "🎮", "mouse": "🖱", "keyboard": "⌨"}
 
-    Two pads with batteries would overflow a status bar, so past one pad the
-    count leads and only the lowest battery is shown — which is the one that is
-    going to interrupt play.
+
+def _one(status: ControllerStatus) -> str:
+    glyph = KIND_GLYPHS.get(status.kind, "🎮")
+    battery = status.battery
+    if battery and battery.percent is not None:
+        return (
+            f"{glyph} {status.name}  "
+            f"{battery_glyph(battery.percent, battery.charging)} {battery.percent}%"
+        )
+    return f"{glyph} {status.name}"
+
+
+def describe(statuses: list[ControllerStatus]) -> str:
+    """One line for whatever is connected.
+
+    Up to two devices are named outright. Past that a status bar would overflow,
+    so the pads are counted and only the lowest battery is shown — the one that
+    is going to interrupt play is the one worth the space.
     """
     if not statuses:
         return ""
 
-    if len(statuses) == 1:
-        status = statuses[0]
-        battery = status.battery
-        if battery and battery.percent is not None:
-            glyph = battery_glyph(battery.percent, battery.charging)
-            return f"🎮 {status.name}  {glyph} {battery.percent}%"
-        return f"🎮 {status.name}"
+    if len(statuses) <= 2:
+        return "   ".join(_one(status) for status in statuses)
 
+    pads = [status for status in statuses if status.is_gamepad]
     charged = [
-        s.battery.percent for s in statuses
-        if s.battery and s.battery.percent is not None
+        status.battery.percent for status in statuses
+        if status.battery and status.battery.percent is not None
     ]
+
+    lead = f"🎮 {len(pads)} controllers" if pads else f"{len(statuses)} devices"
     if charged:
         lowest = min(charged)
-        return f"🎮 {len(statuses)} controllers  {battery_glyph(lowest, False)} {lowest}%"
-    return f"🎮 {len(statuses)} controllers"
+        return f"{lead}  {battery_glyph(lowest, False)} {lowest}%"
+    return lead
 
 
 class ControllerIndicator(QLabel):

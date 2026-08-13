@@ -24,9 +24,12 @@ def qt_app():
 
 
 def pad(name="Wireless Controller", product=0x09CC, sysfs="/devices/usb1/input/input1"):
+    # A `jsN` handler is what makes the kernel — and therefore GameLab — treat
+    # this as a gamepad rather than some other input device.
     return InputDevice(
         name=name, vendor_id=0x054C, product_id=product,
         bustype=0x0003, version=0x0100, sysfs=sysfs,
+        handlers=frozenset({"event20", "js0"}),
     )
 
 
@@ -34,6 +37,9 @@ def pad(name="Wireless Controller", product=0x09CC, sysfs="/devices/usb1/input/i
 def connected(monkeypatch):
     """A mutable list standing in for what is plugged in."""
     devices: list[InputDevice] = []
+    # The watcher reads every input device, not only pads: it also reports
+    # wireless peripherals that publish a battery.
+    monkeypatch.setattr(controller_status, "read_input_devices", lambda: list(devices))
     monkeypatch.setattr(controller_status, "detect_controllers", lambda: list(devices))
     # No sysfs in the test environment, so no batteries — irrelevant here.
     monkeypatch.setattr(controller_status, "battery_for", lambda _device: None)
@@ -168,7 +174,7 @@ def test_detection_failing_does_not_raise(watcher, monkeypatch):
     def explode():
         raise OSError("no /proc for you")
 
-    monkeypatch.setattr(controller_status, "detect_controllers", explode)
+    monkeypatch.setattr(controller_status, "read_input_devices", explode)
     watcher.refresh()  # must not raise
 
     assert watcher.statuses == []
@@ -179,7 +185,7 @@ def test_filesystem_events_are_coalesced(qt_app, connected, monkeypatch):
     scans = []
     watcher = ControllerWatcher(directory="", settle_ms=10)
     monkeypatch.setattr(
-        controller_status, "snapshot", lambda: scans.append(1) or []
+        controller_status, "battery_snapshot", lambda: scans.append(1) or []
     )
 
     watcher._device_directory_changed("/dev/input")
