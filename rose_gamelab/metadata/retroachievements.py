@@ -42,6 +42,7 @@ from typing import Any, Iterable, Optional
 import requests
 
 from rose_gamelab.core.hashing import CHUNK_SIZE, detect_header_size
+from rose_gamelab.db.database import utc_now
 from rose_gamelab.metadata.base import (
     USER_AGENT,
     GameMetadata,
@@ -642,11 +643,49 @@ class RetroAchievementsProvider(MetadataProvider):
 # ── Persistence helpers ───────────────────────────────────────────
 
 def link_game(db, game_id: int, ra_game_id: Optional[int], rom_hash: Optional[str]) -> None:
-    """Record which RA game a library game is, and the hash that matched it."""
+    """Record which RA game a library game is, and the hash that matched it.
+
+    The time is recorded either way. A game that was looked up and found to
+    have no achievement set is a settled answer, not a gap to try again on the
+    next launch — most libraries hold plenty of games RetroAchievements does
+    not cover, and searching for all of them for ever is a rate-limited crawl
+    on somebody else's donated hosting.
+    """
     db.execute(
-        "UPDATE games SET ra_game_id = ?, ra_hash = ? WHERE id = ?",
-        (ra_game_id, rom_hash, game_id),
+        "UPDATE games SET ra_game_id = ?, ra_hash = ?, ra_checked_at = ?"
+        " WHERE id = ?",
+        (ra_game_id, rom_hash, utc_now(), game_id),
     )
+
+
+def forget_ra_match(db, game_id: int) -> None:
+    """Undo a match, and allow it to be attempted again.
+
+    For the user who knows a game *is* on RetroAchievements and wants another
+    go — a renamed dump, a set added since, a title that matched nothing the
+    first time.
+    """
+    db.execute(
+        "UPDATE games SET ra_game_id = NULL, ra_hash = NULL, ra_checked_at = NULL"
+        " WHERE id = ?",
+        (game_id,),
+    )
+
+
+def games_needing_a_match(db, *, limit: Optional[int] = None) -> list:
+    """Games never looked up on RetroAchievements, most recently played first.
+
+    Excludes anything already matched and anything already looked up and found
+    to have nothing, so a launch only spends requests on genuinely new games.
+    """
+    sql = (
+        "SELECT id, title, system FROM games"
+        " WHERE ra_game_id IS NULL AND ra_checked_at IS NULL AND hidden = 0"
+        " ORDER BY last_played IS NULL, last_played DESC, id"
+    )
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+    return db.query(sql)
 
 
 def save_achievements(db, game_id: int, achievements: Iterable[Achievement]) -> int:

@@ -101,8 +101,14 @@ stays.
 - **ROM health check** — verify your dumps against No-Intro and Redump
   catalogues and find the bad ones before they fail three hours in
   (`rose-gamelab verify`; you supply the DAT files)
-- An in-game panel on Shift+Tab: screenshots, saves, achievements and pad
-  battery over a running game
+- An in-game panel on **Ctrl+Tab**: screenshots, saves, the achievement list
+  with what is still unearned, and pad battery, over a running game. Ctrl
+  rather than Shift so it does not fight Steam's own overlay
+- **Merge duplicates** — fold two entries into one keeping both ways to play,
+  all the playtime, and whichever of them had art (`rose-gamelab merge`)
+- **Back up emulator configuration** — every graphics tweak and controller
+  binding, as plain files (`rose-gamelab backup-configs`). Firmware, caches and
+  save data are left out; saves have their own backup
 - **A cleanup pass** — `rose-gamelab cleanup` finds missing files, duplicates,
   games with no emulator installed and artwork nothing refers to. It reports by
   default; `--fix` only ever touches GameLab's own cache, never your games
@@ -278,6 +284,8 @@ rose-gamelab doctor               # what GameLab sees here — paste into bug re
 rose-gamelab cleanup              # what has gone wrong in the library
 rose-gamelab verify --dats ~/dats # check ROMs against No-Intro/Redump
 rose-gamelab controllers list     # pads seen, and the mappings saved for them
+rose-gamelab merge 12 47          # fold entry 47 into entry 12
+rose-gamelab backup-configs       # copy emulator configuration somewhere safe
 rose-gamelab system ps2 --args "-fullscreen"
 ```
 
@@ -294,7 +302,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1253 tests, none of which touch the network or require a controller, an optical
+1290 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont, QKeyEvent
+from PySide6.QtGui import QColor, QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -203,7 +203,7 @@ class GameOverlay(QWidget):
         layout.addWidget(self._build_saves(), 1)
         layout.addWidget(self._build_controls())
 
-        hint = QLabel("Esc  close this panel and go back to the game")
+        hint = QLabel("Ctrl+Tab  open and close    ·    Esc  back to the game")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet(f"color: {self.theme.text_dim}; font-size: 12px;")
         layout.addWidget(hint)
@@ -248,6 +248,16 @@ class GameOverlay(QWidget):
         )
         self.achievements.setWordWrap(True)
         section.body.addWidget(self.achievements)
+
+        # The list, not only the count. Mid-game, "seven of forty" is trivia;
+        # "which one could I get next" is the reason to open this at all.
+        self.achievement_list = QListWidget()
+        self.achievement_list.setStyleSheet(
+            f"background-color: {self.theme.surface}; color: {self.theme.text};"
+            f"border-radius: {ui_theme.RADIUS_LARGE}px; padding: 6px;"
+        )
+        self.achievement_list.setMaximumHeight(190)
+        section.body.addWidget(self.achievement_list)
 
         return section
 
@@ -320,10 +330,16 @@ class GameOverlay(QWidget):
             self.achievements.setText("")
             return
 
-        try:
-            from rose_gamelab.metadata.retroachievements import progress_for
+        self.achievement_list.clear()
 
-            earned, total, points, _possible = progress_for(self.library.db, self.game.id)
+        try:
+            from rose_gamelab.metadata.retroachievements import (
+                achievements_for,
+                progress_for,
+            )
+
+            earned, total, points, possible = progress_for(self.library.db, self.game.id)
+            found = achievements_for(self.library.db, self.game.id)
         except Exception:
             logger.exception("could not read achievements")
             self.achievements.setText("Achievements are unavailable.")
@@ -336,8 +352,20 @@ class GameOverlay(QWidget):
             return
 
         self.achievements.setText(
-            f"{earned} of {total} unlocked  ·  {points} points"
+            f"{earned} of {total} unlocked  ·  {points} of {possible} points"
         )
+
+        # Unearned first: this is opened mid-game, and the useful question is
+        # what is still available, not a victory lap over what is done.
+        for achievement in sorted(found, key=lambda a: (a.earned, a.title)):
+            mark = "✓" if achievement.earned else "○"
+            item = QListWidgetItem(
+                f"{mark}  {achievement.title}   ·   {achievement.points} pts\n"
+                f"     {achievement.description or ''}".rstrip()
+            )
+            if achievement.earned:
+                item.setForeground(QColor(self.theme.text_dim))
+            self.achievement_list.addItem(item)
 
     def _load_saves(self) -> None:
         self.save_list.clear()

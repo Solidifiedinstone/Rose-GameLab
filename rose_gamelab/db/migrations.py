@@ -384,6 +384,24 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         );
         """,
     ),
+    (
+        7,
+        "remember which games have no RetroAchievements set",
+        """
+        -- Matching a game to RetroAchievements is the expensive half: a hash
+        -- where the algorithm is implemented, a rate-limited title search
+        -- otherwise. Most libraries contain plenty of games RetroAchievements
+        -- simply does not cover, and without a record of that, every launch
+        -- would search for all of them again, for ever.
+        --
+        -- When this is set and `ra_game_id` is null, the answer is known and
+        -- settled: this game has no achievement set. The user can still ask
+        -- for a specific game to be tried again by hand, which clears it.
+        ALTER TABLE games ADD COLUMN ra_checked_at TEXT;
+
+        CREATE INDEX idx_games_ra_checked ON games(ra_checked_at);
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)

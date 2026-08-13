@@ -704,5 +704,89 @@ def system_command(
     database.close()
 
 
+@main.command("merge")
+@click.argument("keep", type=int)
+@click.argument("others", type=int, nargs=-1, required=True)
+@click.pass_context
+def merge(ctx: click.Context, keep: int, others: tuple[int, ...]) -> None:
+    """Fold duplicate entries into one, keeping KEEP.
+
+    Everything the others had moves across: files, ways to play, playtime,
+    achievements, collections. Nothing on disk is touched — their files are
+    re-pointed at the entry you keep, never deleted.
+
+        rose-gamelab merge 12 47
+    """
+    from rich.console import Console
+
+    from rose_gamelab.core.curation import merge_games
+    from rose_gamelab.core.library import Library
+
+    console = Console()
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+
+    keeper = library.get(keep)
+    if keeper is None:
+        console.print(f"[red]There is no game with id {keep}.[/]")
+        database.close()
+        return
+
+    for game_id in others:
+        game = library.get(game_id)
+        console.print(
+            f"  folding [yellow]{game.title if game else game_id}[/] "
+            f"into [green]{keeper.title}[/]"
+        )
+
+    result = merge_games(library, keep, others)
+    console.print(f"[red]{result.summary}[/]" if result.errors
+                  else f"[green]{result.summary}[/]")
+    database.close()
+
+
+@main.command("backup-configs")
+@click.option("--label", default=None, help="A name to remember this backup by.")
+@click.option("--list", "show", is_flag=True, help="List existing backups instead.")
+@click.pass_context
+def backup_configs(ctx: click.Context, label: Optional[str], show: bool) -> None:
+    """Copy emulator configuration somewhere safe.
+
+    Saves are one game's progress; a configuration is every graphics tweak and
+    controller binding you have arrived at over months. Backups are plain files
+    you can read and restore with a file manager.
+    """
+    from rich.console import Console
+
+    from rose_gamelab.core import emulator_configs
+
+    console = Console()
+
+    if show:
+        backups = emulator_configs.list_backups()
+        if not backups:
+            console.print("[dim]No configuration backups yet.[/]")
+            return
+        for path in backups:
+            console.print(f"  {path}")
+        return
+
+    found = emulator_configs.known_locations()
+    if not found:
+        console.print("[yellow]No emulator configuration found on this machine.[/]")
+        return
+
+    console.print(
+        "[dim]" + ", ".join(sorted({loc.emulator for loc in found})) + "[/]"
+    )
+    result = emulator_configs.back_up(label=label)
+
+    console.print(f"[green]{result.summary}[/]")
+    if result.directory:
+        console.print(f"[dim]{result.directory}[/]")
+    for error in result.errors[:5]:
+        console.print(f"[yellow]  {error}[/]")
+
+
 if __name__ == "__main__":
     main()

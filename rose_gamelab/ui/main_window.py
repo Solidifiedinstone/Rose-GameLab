@@ -42,7 +42,10 @@ from rose_gamelab.core.profiles import ProfileStore
 from rose_gamelab.core.scanner import RomScanner
 from rose_gamelab.core.system_settings import SystemSettingsStore
 from rose_gamelab.db.database import Database
-from rose_gamelab.metadata.retroachievements import on_retroachievements
+from rose_gamelab.metadata.retroachievements import (
+    games_needing_a_match,
+    on_retroachievements,
+)
 from rose_gamelab.metadata.scraper import Scraper
 from rose_gamelab.ui.branding import APP_NAME
 from rose_gamelab.ui.controller_watch import ControllerWatcher
@@ -66,6 +69,11 @@ if TYPE_CHECKING:                    # imported lazily at runtime
     from rose_gamelab.metadata.retroachievements import RetroAchievementsProvider
 
 logger = logging.getLogger(__name__)
+
+#: How many never-checked games to look up per launch. Each is a rate-limited
+#: request against donated hosting, so a freshly imported library of a thousand
+#: games is worked through over several launches rather than in one long stall.
+MATCHES_PER_LAUNCH = 25
 
 SORT_OPTIONS = [
     ("Title", "title"),
@@ -298,8 +306,11 @@ class MainWindow(QMainWindow):
             ("Ctrl+F", lambda: self.search.setFocus()),
             ("Ctrl+R", self.rescan_all),
             ("Ctrl+B", self.open_big_picture),
-            # Shift+Tab, as Steam trained everyone to expect.
-            ("Shift+Tab", self.toggle_game_overlay),
+            # Ctrl+Tab rather than Steam's Shift+Tab. A Steam game launched
+            # through GameLab has Steam's own overlay bound to Shift+Tab, and
+            # two panels fighting over one chord is worse than an unfamiliar
+            # one. Nothing else here uses Ctrl+Tab.
+            ("Ctrl+Tab", self.toggle_game_overlay),
             # Wrapped: QAction.triggered would otherwise pass its `checked`
             # flag in as the list of files to organise.
             ("Ctrl+O", lambda: self.organise_roms()),
@@ -595,18 +606,20 @@ class MainWindow(QMainWindow):
             " WHERE ra_game_id IS NOT NULL AND hidden = 0"
             " ORDER BY last_played IS NULL, last_played DESC"
         )
-        if not linked:
-            if not quietly:
-                self.status.setText(
-                    "No games are linked to RetroAchievements yet — open one and "
-                    "use Update achievements."
-                )
-            return
+
+
+        # Games never looked up before. Anything already checked is excluded,
+        # whether it matched or not, so a game RetroAchievements does not cover
+        # is asked about exactly once in its life rather than on every launch.
+        unmatched = games_needing_a_match(self.db, limit=MATCHES_PER_LAUNCH)
 
         def work(report):
-            from rose_gamelab.metadata.retroachievements import save_achievements
+            from rose_gamelab.metadata.retroachievements import (
+                link_game,
+                save_achievements,
+            )
 
-            updated = 0
+            refreshed = 0
             for index, row in enumerate(linked, start=1):
                 report(f"Achievements: {row['title']} ({index} of {len(linked)})")
                 try:
@@ -617,13 +630,51 @@ class MainWindow(QMainWindow):
                     logger.exception("could not refresh achievements for %s", row["title"])
                     continue
                 save_achievements(self.db, row["id"], found)
-                updated += 1
-            return updated
+                refreshed += 1
 
-        def done(updated):
+            matched = 0
+            for index, row in enumerate(unmatched, start=1):
+                report(f"Looking up {row['title']} ({index} of {len(unmatched)})")
+                game = self.library.get(row["id"])
+                if game is None:
+                    continue
+
+                try:
+                    identifier = self._match_retroachievements(game)
+                except Exception:
+                    # Left unchecked rather than recorded as "no set": a failed
+                    # request is not an answer, and marking it as one would
+                    # exclude the game from every future launch.
+                    logger.exception("could not look up %s", row["title"])
+                    continue
+
+                link_game(self.db, row["id"], identifier, None)
+                if identifier is None:
+                    continue
+
+                try:
+                    save_achievements(
+                        self.db, row["id"], provider.achievements(identifier)
+                    )
+                except Exception:
+                    logger.exception("could not fetch achievements for %s", row["title"])
+                matched += 1
+
+            return refreshed, matched, len(unmatched)
+
+        def done(counts):
+            refreshed, matched, checked = counts
+            parts = []
+            if refreshed:
+                parts.append(f"progress for {refreshed} game(s)")
+            if matched:
+                parts.append(f"{matched} newly matched")
+            if checked and not matched:
+                parts.append(f"{checked} checked, none on RetroAchievements")
+
             self.status.setText(
-                f"Achievements up to date for {updated} game(s)"
-                if updated else "Could not refresh achievements"
+                "Achievements: " + ", ".join(parts) if parts
+                else "Achievements are up to date"
             )
             if self.pages.currentWidget() is self.game_page and self.game_page.game:
                 self.open_game_page(self.game_page.game.id)

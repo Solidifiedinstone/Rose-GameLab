@@ -696,3 +696,113 @@ def test_the_preference_survives_a_file_that_predates_it(tmp_path):
 
     assert prefs.achievements_on_start is True
     assert prefs.scan_on_start is False
+
+
+# ── Remembering what has been checked ─────────────────────────────
+#
+# Matching is the expensive half: a hash where the algorithm is implemented, a
+# rate-limited search otherwise. Most libraries hold plenty of games
+# RetroAchievements does not cover, so without a record of that, every launch
+# would search for all of them again for ever.
+
+@pytest.fixture
+def db(tmp_path):
+    from rose_gamelab.db.database import Database
+
+    database = Database(tmp_path / "library.db")
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def lib(db):
+    from rose_gamelab.core.library import Library
+
+    return Library(db)
+
+
+def test_a_new_game_is_waiting_to_be_matched(db, lib):
+    from rose_gamelab.metadata.retroachievements import games_needing_a_match
+
+    lib.add_game(title="Brand New", system="snes", path="/r/a.sfc")
+
+    assert [row["title"] for row in games_needing_a_match(db)] == ["Brand New"]
+
+
+def test_a_matched_game_is_not_looked_up_again(db, lib):
+    from rose_gamelab.metadata.retroachievements import (
+        games_needing_a_match,
+        link_game,
+    )
+
+    game_id = lib.add_game(title="Matched", system="snes", path="/r/a.sfc")
+    link_game(db, game_id, 4242, "abc")
+
+    assert games_needing_a_match(db) == []
+
+
+def test_a_game_with_no_achievement_set_is_never_asked_about_again(db, lib):
+    """This is the whole point: "not on RetroAchievements" is an answer, and
+    asking again every launch is a crawl on donated hosting for no reason."""
+    from rose_gamelab.metadata.retroachievements import (
+        games_needing_a_match,
+        link_game,
+    )
+
+    game_id = lib.add_game(title="Some Homebrew", system="snes", path="/r/h.sfc")
+    link_game(db, game_id, None, None)      # looked up, nothing there
+
+    assert games_needing_a_match(db) == []
+    assert db.query_one(
+        "SELECT ra_checked_at FROM games WHERE id = ?", (game_id,)
+    )["ra_checked_at"]
+
+
+def test_games_added_later_are_picked_up(db, lib):
+    from rose_gamelab.metadata.retroachievements import (
+        games_needing_a_match,
+        link_game,
+    )
+
+    first = lib.add_game(title="Old", system="snes", path="/r/a.sfc")
+    link_game(db, first, None, None)
+    lib.add_game(title="Added Today", system="snes", path="/r/b.sfc")
+
+    assert [row["title"] for row in games_needing_a_match(db)] == ["Added Today"]
+
+
+def test_a_match_can_be_forgotten_so_it_is_tried_again(db, lib):
+    """For someone who knows a game is on RetroAchievements — a renamed dump,
+    a set added since."""
+    from rose_gamelab.metadata.retroachievements import (
+        forget_ra_match,
+        games_needing_a_match,
+        link_game,
+    )
+
+    game_id = lib.add_game(title="Try Again", system="snes", path="/r/a.sfc")
+    link_game(db, game_id, None, None)
+
+    forget_ra_match(db, game_id)
+
+    assert [row["title"] for row in games_needing_a_match(db)] == ["Try Again"]
+
+
+def test_hidden_games_are_not_looked_up(db, lib):
+    from rose_gamelab.metadata.retroachievements import games_needing_a_match
+
+    game_id = lib.add_game(title="Hidden", system="snes", path="/r/a.sfc")
+    db.execute("UPDATE games SET hidden = 1 WHERE id = ?", (game_id,))
+
+    assert games_needing_a_match(db) == []
+
+
+def test_the_lookup_queue_is_limited(db, lib):
+    """A freshly imported library of a thousand games is worked through over
+    several launches rather than in one long stall."""
+    from rose_gamelab.metadata.retroachievements import games_needing_a_match
+
+    for index in range(30):
+        lib.add_game(title=f"G{index}", system="snes", path=f"/r/{index}.sfc")
+
+    assert len(games_needing_a_match(db, limit=25)) == 25
