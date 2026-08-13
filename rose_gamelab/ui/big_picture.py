@@ -23,6 +23,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QFont, QKeyEvent, QPixmap
@@ -51,6 +52,15 @@ TILE_FOCUSED_SCALE = 1.16
 SHELF_SPACING = 22
 SCROLL_MS = 220
 
+# How many games a shelf shows. Applied in the query rather than by slicing.
+SHELF_LIMIT = 20
+SYSTEM_SHELF_LIMIT = 40
+
+# Covers not yet on screen are decoded between events rather than up front.
+# Small batches, so navigation never waits behind a decode.
+BACKGROUND_COVER_MS = 30
+BACKGROUND_COVER_BATCH = 6
+
 
 class BigPictureTile(QLabel):
     """One game in a shelf. Grows and gains a ring when focused.
@@ -70,6 +80,8 @@ class BigPictureTile(QLabel):
         self.game = game
         self.theme = theme
         self._focused = False
+        self._cover: Optional[QPixmap] = None
+        self._cover_loaded = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.base_width = TILE_WIDTH
@@ -84,9 +96,40 @@ class BigPictureTile(QLabel):
 
         self._render()
 
+    @property
+    def cover_loaded(self) -> bool:
+        return self._cover_loaded
+
+    def load_cover(self) -> None:
+        """Decode this tile's cover, once.
+
+        Decoding is deliberately not done in the constructor. A library of a
+        few hundred games builds a couple of thousand tiles, and decoding every
+        one of their covers before the window appears meant Big Picture took
+        seconds to open — all of it spent on art for shelves nobody had
+        scrolled to yet.
+
+        The picture is decoded at the FOCUSED size and scaled down in memory
+        for the resting state. Asking the loader for two different widths would
+        decode the same file twice and take two slots in a shared cache that a
+        large library already overflows, so every focus move would re-read it
+        from disk.
+        """
+        if self._cover_loaded:
+            return
+
+        self._cover_loaded = True
+        self._cover = load_cover(
+            self.game.cover_path or "", int(self.base_width * TILE_FOCUSED_SCALE)
+        )
+        if self._cover is not None:
+            self._render()
+
     def set_focused(self, focused: bool) -> None:
         if self._focused != focused:
             self._focused = focused
+            # A tile being focused is on screen by definition.
+            self.load_cover()
             self._render()
 
     def mousePressEvent(self, event) -> None:
@@ -104,9 +147,15 @@ class BigPictureTile(QLabel):
         super().mouseDoubleClickEvent(event)
 
     def _render(self) -> None:
-        width = int(self.base_width * (TILE_FOCUSED_SCALE if self._focused else 1.0))
-
-        pixmap = load_cover(self.game.cover_path or "", width)
+        pixmap = self._cover
+        if pixmap is not None and not self._focused:
+            # Scaling an already-decoded pixmap is memory work; re-asking the
+            # loader for a smaller width would be a second decode from disk.
+            pixmap = pixmap.scaled(
+                self.base_width, self.base_height,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
 
         if pixmap is not None:
             self.setPixmap(pixmap)
@@ -179,17 +228,7 @@ class Shelf(QWidget):
         row.setContentsMargins(0, 4, 0, 4)
         row.setSpacing(SHELF_SPACING)
 
-        for position, game in enumerate(games):
-            tile = BigPictureTile(game, theme)
-            tile.selected.connect(
-                lambda _tile, index=position: self.tile_selected.emit(index)
-            )
-            tile.activated.connect(
-                lambda _tile, index=position: self.tile_activated.emit(index)
-            )
-            self.tiles.append(tile)
-            row.addWidget(tile)
-
+        self._row = row
         row.addStretch(1)
         self.scroll.setWidget(strip)
         layout.addWidget(self.scroll)
@@ -204,11 +243,70 @@ class Shelf(QWidget):
     def current_game(self):
         return self.games[self.index] if self.games else None
 
+    @property
+    def populated(self) -> bool:
+        return len(self.tiles) == len(self.games)
+
+    def populate(self) -> None:
+        """Build this shelf's tiles.
+
+        Deferred because building widgets is the bulk of what opening this
+        window costs — a Qt layout insertion per tile, and hundreds of tiles
+        for shelves several screens down that may never be looked at. The
+        games are known from the start; only the widgets wait.
+        """
+        if self.populated:
+            return
+
+        for position, game in enumerate(self.games):
+            tile = BigPictureTile(game, self.theme)
+            tile.selected.connect(
+                lambda _tile, index=position: self.tile_selected.emit(index)
+            )
+            tile.activated.connect(
+                lambda _tile, index=position: self.tile_activated.emit(index)
+            )
+            self.tiles.append(tile)
+            # Before the trailing stretch, which must stay last or the tiles
+            # bunch up against the far edge.
+            self._row.insertWidget(self._row.count() - 1, tile)
+
+    def load_covers_near(self, index: Optional[int] = None, *, span: int = 8) -> int:
+        """Decode the covers around a position. Returns how many were loaded.
+
+        A shelf is a horizontal strip: only a handful of tiles either side of
+        the selection can be on screen, and the rest are work nobody has asked
+        for yet.
+        """
+        self.populate()
+        if not self.tiles:
+            return 0
+
+        centre = self.index if index is None else index
+        first = max(0, centre - span)
+        last = min(len(self.tiles), centre + span + 1)
+
+        loaded = 0
+        for tile in self.tiles[first:last]:
+            if not tile.cover_loaded:
+                tile.load_cover()
+                loaded += 1
+        return loaded
+
+    def unloaded_tiles(self):
+        return [tile for tile in self.tiles if not tile.cover_loaded]
+
+    def fully_loaded(self) -> bool:
+        return self.populated and not self.unloaded_tiles()
+
     def set_active(self, active: bool) -> None:
         """Only the active shelf shows a focused tile."""
+        if active:
+            self.populate()
         for position, tile in enumerate(self.tiles):
             tile.set_focused(active and position == self.index)
         if active:
+            self.load_covers_near()
             self._reveal()
 
     def move(self, delta: int) -> bool:
@@ -217,12 +315,16 @@ class Shelf(QWidget):
 
     def focus_tile(self, index: int) -> bool:
         """Focus one tile by position. False if there is no such tile."""
+        self.populate()
         if not (0 <= index < len(self.tiles)):
             return False
 
         self.tiles[self.index].set_focused(False)
         self.index = index
         self.tiles[self.index].set_focused(True)
+        # Ahead of the selection, so covers are already there when the user
+        # arrives rather than appearing under them.
+        self.load_covers_near()
         self._reveal()
         return True
 
@@ -346,6 +448,10 @@ class BigPictureWindow(QWidget):
         if self.shelves:
             self.shelves[0].set_active(True)
             self._update_now_showing()
+            # Shelves near the top are the ones about to be looked at.
+            for shelf in self.shelves[1:3]:
+                shelf.load_covers_near(0)
+            self._start_background_covers()
         else:
             empty = QLabel("Your library is empty.\nAdd a source to get started.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -358,20 +464,29 @@ class BigPictureWindow(QWidget):
         Recently played comes first because the most common reason to open a
         launcher is to continue what you were already playing.
         """
+        # Limits are pushed into the queries rather than sliced afterwards. A
+        # shelf shows at most forty games; fetching a whole system's worth to
+        # throw away all but forty built thousands of objects per open.
         shelves: list[tuple[str, list]] = [
             ("Continue Playing", [
-                g for g in self.library.list_games(sort="last_played", descending=True)
-                if g.last_played
-            ][:20]),
-            ("Favourites", self.library.list_games(favorites_only=True)[:20]),
-            ("Recently Added", self.library.list_games(sort="added", descending=True)[:20]),
+                game for game in self.library.list_games(
+                    sort="last_played", descending=True, limit=SHELF_LIMIT,
+                )
+                if game.last_played
+            ]),
+            ("Favourites", self.library.list_games(
+                favorites_only=True, limit=SHELF_LIMIT,
+            )),
+            ("Recently Added", self.library.list_games(
+                sort="added", descending=True, limit=SHELF_LIMIT,
+            )),
         ]
 
         for system_id, _count in self.library.systems_in_library():
             system = get_system(system_id)
             shelves.append((
                 system.name if system else system_id,
-                self.library.list_games(system=system_id)[:40],
+                self.library.list_games(system=system_id, limit=SYSTEM_SHELF_LIMIT),
             ))
 
         return shelves
@@ -404,6 +519,40 @@ class BigPictureWindow(QWidget):
         """Select and launch a double-clicked tile."""
         self._select(row, index)
         self._launch_current()
+
+    def _start_background_covers(self) -> None:
+        """Fill in the remaining covers a few at a time, while idle.
+
+        Decoding every cover up front is what made this window take seconds to
+        open. Decoding none of them means art appearing under the user as they
+        scroll. So the ones on screen are loaded immediately and the rest
+        trickle in between events, in batches small enough that navigation
+        never waits on them.
+        """
+        self._background = QTimer(self)
+        self._background.setInterval(BACKGROUND_COVER_MS)
+        self._background.timeout.connect(self._load_a_few_covers)
+        self._background.start()
+
+    def _load_a_few_covers(self) -> None:
+        remaining = BACKGROUND_COVER_BATCH
+
+        for shelf in self.shelves:
+            if not shelf.populated:
+                # One shelf per tick: building a shelf is the expensive half,
+                # and doing several would be the stall this exists to avoid.
+                shelf.populate()
+                return
+
+            for tile in shelf.unloaded_tiles():
+                tile.load_cover()
+                remaining -= 1
+                if remaining <= 0:
+                    return
+
+        if all(shelf.fully_loaded() for shelf in self.shelves):
+            # Everything is built and decoded; stop waking up for nothing.
+            self._background.stop()
 
     def set_controllers(self, statuses: list) -> None:
         """Show which pads are connected. Fed by the main window's watcher."""

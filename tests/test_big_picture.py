@@ -256,3 +256,151 @@ def test_an_empty_library_does_not_crash(qt_app, tmp_path):
     assert window.current_shelf is None
     window.close()
     database.close()
+
+
+# ── Lazy building and cover loading ───────────────────────────────
+#
+# Opening this window used to decode every cover and build every tile first:
+# 2.1 seconds before anything appeared, for a library of 1500 games, almost
+# all of it spent on shelves several screens down. Both are deferred now, and
+# laziness is exactly the kind of optimisation that breaks quietly — a shelf
+# that never populates looks empty rather than broken.
+
+@pytest.fixture
+def big_library(qt_app, library):
+    # Enough systems to produce more shelves than are built up front, which is
+    # the whole point of the fixture — three systems would all be eager.
+    systems = ["snes", "megadrive", "ps1", "n64", "gba", "nes", "psp", "nds"]
+    for index in range(120):
+        library.add_game(
+            title=f"Game {index}",
+            system=systems[index % len(systems)],
+            path=f"/roms/{index}.rom",
+        )
+    win = BigPictureWindow(library, FakeLauncher(), next(iter(THEMES.values())))
+    win.show()
+    qt_app.processEvents()
+    yield win
+    win.close()
+
+
+def test_shelves_further_down_are_not_built_up_front(big_library):
+    """The expensive half of opening this window is making widgets."""
+    assert big_library.shelves[0].populated
+    assert not big_library.shelves[-1].populated
+
+
+def test_a_shelf_builds_itself_when_navigated_to(big_library):
+    last = len(big_library.shelves) - 1
+    for _ in range(last):
+        press(big_library, Qt.Key.Key_Down)
+
+    assert big_library.shelves[last].populated
+    assert big_library.shelves[last].tiles
+
+
+def test_navigation_into_an_unbuilt_shelf_still_selects_a_game(big_library):
+    press(big_library, Qt.Key.Key_Down)
+    press(big_library, Qt.Key.Key_Right)
+
+    assert big_library.current_shelf.current_game is not None
+    assert big_library.now_showing.text()
+
+
+def test_the_focused_tile_always_has_its_cover(big_library):
+    """Whatever else is deferred, the thing being looked at is not."""
+    press(big_library, Qt.Key.Key_Right)
+    tile = big_library.current_shelf.tiles[big_library.current_shelf.index]
+
+    assert tile.cover_loaded
+
+
+def test_covers_are_loaded_around_the_selection_not_all_at_once(big_library):
+    shelf = big_library.shelves[0]
+
+    assert any(tile.cover_loaded for tile in shelf.tiles)
+    assert not all(tile.cover_loaded for tile in shelf.tiles)
+
+
+def test_moving_along_a_shelf_loads_covers_ahead(big_library):
+    shelf = big_library.shelves[0]
+    before = sum(1 for tile in shelf.tiles if tile.cover_loaded)
+
+    for _ in range(6):
+        press(big_library, Qt.Key.Key_Right)
+
+    assert sum(1 for tile in shelf.tiles if tile.cover_loaded) > before
+
+
+def test_the_background_pass_eventually_finishes_everything(big_library):
+    for _ in range(500):
+        if all(shelf.fully_loaded() for shelf in big_library.shelves):
+            break
+        big_library._load_a_few_covers()
+
+    assert all(shelf.populated for shelf in big_library.shelves)
+    assert all(shelf.fully_loaded() for shelf in big_library.shelves)
+
+
+def test_the_background_timer_stops_when_there_is_nothing_left(big_library):
+    """Otherwise it wakes up thirty times a second forever."""
+    for _ in range(500):
+        big_library._load_a_few_covers()
+        if not big_library._background.isActive():
+            break
+
+    assert not big_library._background.isActive()
+
+
+def test_a_cover_is_decoded_only_once(qt_app, library, monkeypatch):
+    """It is decoded at the focused size and scaled down in memory; asking the
+    loader for a second width would re-read the file on every focus move —
+    which is what happened before, on every single press of an arrow key."""
+    from rose_gamelab.ui.big_picture import BigPictureTile
+
+    calls = []
+    monkeypatch.setattr(
+        "rose_gamelab.ui.big_picture.load_cover",
+        lambda path, width: calls.append((path, width)) or None,
+    )
+    game_id = library.add_game(title="G", system="snes", path="/roms/g.sfc")
+    tile = BigPictureTile(library.get(game_id), next(iter(THEMES.values())))
+
+    tile.load_cover()
+    tile.set_focused(True)
+    tile.set_focused(False)
+    tile.load_cover()
+
+    assert len(calls) == 1
+
+
+def test_populating_twice_does_not_duplicate_tiles(big_library):
+    shelf = big_library.shelves[-1]
+    shelf.populate()
+    count = len(shelf.tiles)
+    shelf.populate()
+
+    assert len(shelf.tiles) == count
+
+
+def test_every_game_in_a_shelf_gets_a_tile(big_library):
+    for shelf in big_library.shelves:
+        shelf.populate()
+        assert len(shelf.tiles) == len(shelf.games)
+
+
+def test_shelf_queries_are_limited_rather_than_sliced(library, qt_app):
+    """Fetching a whole system to keep forty built thousands of objects."""
+    calls = []
+    original = library.list_games
+
+    def record(**kwargs):
+        calls.append(kwargs)
+        return original(**kwargs)
+
+    library.list_games = record
+    win = BigPictureWindow(library, FakeLauncher(), next(iter(THEMES.values())))
+
+    assert calls, "the window should query the library"
+    assert all(call.get("limit") for call in calls)
+    win.close()
