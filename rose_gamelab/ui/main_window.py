@@ -40,6 +40,7 @@ from rose_gamelab.core.launcher import Launcher, LaunchError
 from rose_gamelab.core.library import NO_SOURCE, Library
 from rose_gamelab.core.profiles import ProfileStore
 from rose_gamelab.core.scanner import RomScanner
+from rose_gamelab.core.system_settings import SystemSettingsStore
 from rose_gamelab.db.database import Database
 from rose_gamelab.metadata.retroachievements import on_retroachievements
 from rose_gamelab.metadata.scraper import Scraper
@@ -94,8 +95,11 @@ class MainWindow(QMainWindow):
         self.profiles.ensure_default_exists()
         self.scanner = RomScanner(self.library)
         self.controller_store = ControllerProfileStore(database)
+        self.system_settings = SystemSettingsStore(database)
         self.launcher = Launcher(
-            self.library, self.profiles, controller_profiles=self.controller_store
+            self.library, self.profiles,
+            controller_profiles=self.controller_store,
+            system_settings=self.system_settings,
         )
         self.scraper = Scraper(self.library)
 
@@ -365,6 +369,10 @@ class MainWindow(QMainWindow):
         elif self._filter == "hidden":
             kwargs["hidden_only"] = True
         elif self._filter == "recent":
+            # Filtered, not merely sorted. A shelf whose purpose is picking up
+            # where you left off should not be padded out with games that have
+            # never been started.
+            kwargs["played_only"] = True
             kwargs["sort"] = "last_played"
             kwargs["descending"] = True
         elif self._filter.startswith("system:"):

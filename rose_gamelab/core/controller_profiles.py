@@ -23,10 +23,12 @@ claim to have reordered something it cannot.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from rose_gamelab.core import controller_db
@@ -38,6 +40,33 @@ logger = logging.getLogger(__name__)
 #: Player slots offered. Four is what the consoles being emulated support, and
 #: what every emulator here exposes.
 MAX_PLAYERS = 4
+
+#: Marks a file as ours, so importing something else fails clearly rather than
+#: producing a library of empty mappings.
+PROFILE_FILE_FORMAT = "rose-gamelab-controller-profiles"
+
+
+@dataclass
+class ImportSummary:
+    """What importing a profile file actually did."""
+
+    imported: int = 0
+    #: Left alone because a profile for that pad already existed.
+    kept: int = 0
+    #: Entries with nothing usable in them.
+    skipped: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def summary(self) -> str:
+        if self.errors:
+            return "; ".join(self.errors)
+        parts = [f"{self.imported} imported"]
+        if self.kept:
+            parts.append(f"{self.kept} already mapped and left alone")
+        if self.skipped:
+            parts.append(f"{self.skipped} unusable")
+        return ", ".join(parts)
 
 
 def _now() -> str:
@@ -297,6 +326,95 @@ class ControllerProfileStore:
             entries.append((slot if slot is not None else MAX_PLAYERS + 1, mapping))
 
         return [mapping for _slot, mapping in sorted(entries, key=lambda e: e[0])]
+
+    # ── Sharing ───────────────────────────────────────────────────
+
+    def export_profiles(self, path: str | Path, *, guids=None) -> int:
+        """Write profiles to a file somebody else can import. Returns how many.
+
+        Mapping a pad is tedious and the result is not personal — anyone with
+        the same controller wants exactly the same file. Player assignment is
+        deliberately not exported: which pad is player one is about a
+        particular set of hardware on a particular sofa, not about the pad.
+        """
+        profiles = self.list_profiles()
+        if guids is not None:
+            wanted = set(guids)
+            profiles = [p for p in profiles if p.guid in wanted]
+
+        payload = {
+            "format": PROFILE_FILE_FORMAT,
+            "version": 1,
+            "profiles": [
+                {
+                    "name": profile.name,
+                    "guid": profile.guid,
+                    "device_name": profile.device_name,
+                    "mapping": profile.mapping,
+                    "source": profile.source,
+                }
+                for profile in profiles
+            ],
+        }
+
+        target = Path(path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return len(payload["profiles"])
+
+    def import_profiles(self, path: str | Path, *, overwrite: bool = False) -> "ImportSummary":
+        """Read profiles from a file. Existing ones are kept unless told otherwise.
+
+        Keeping existing profiles is the safe default: someone who has corrected
+        their own mapping should not lose it by importing a friend's file that
+        happens to cover the same pad.
+        """
+        summary = ImportSummary()
+        source = Path(path).expanduser()
+
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except OSError as exc:
+            summary.errors.append(f"could not read {source.name}: {exc}")
+            return summary
+        except json.JSONDecodeError as exc:
+            summary.errors.append(f"{source.name} is not valid JSON: {exc}")
+            return summary
+
+        if not isinstance(payload, dict) or payload.get("format") != PROFILE_FILE_FORMAT:
+            summary.errors.append(
+                f"{source.name} is not a Rose GameLab controller profile file."
+            )
+            return summary
+
+        for entry in payload.get("profiles", []):
+            if not isinstance(entry, dict):
+                continue
+
+            guid = str(entry.get("guid", "")).strip().lower()
+            mapping = str(entry.get("mapping", "")).strip()
+            if not guid or not mapping:
+                summary.skipped += 1
+                continue
+
+            existing = self.for_guid(guid)
+            if existing is not None and not overwrite:
+                summary.kept += 1
+                continue
+
+            self.save(ControllerProfile(
+                name=str(entry.get("name") or "Gamepad"),
+                guid=guid,
+                device_name=str(entry.get("device_name") or ""),
+                mapping=mapping,
+                # However it was arrived at elsewhere, here it is a choice
+                # somebody made and handed over.
+                source="user",
+                player=existing.player if existing else None,
+            ))
+            summary.imported += 1
+
+        return summary
 
     def sdl_environment(self, devices, *, game_id: Optional[int] = None) -> dict[str, str]:
         """Environment for a launch, honouring saved profiles and overrides."""

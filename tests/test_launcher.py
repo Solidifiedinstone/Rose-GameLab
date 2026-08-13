@@ -563,3 +563,82 @@ def test_a_launch_profile_can_override_the_controller_configuration(library, pro
     result = profile.environment(base)
 
     assert result["SDL_GAMECONTROLLERCONFIG"] == "mine"
+
+
+# ── Per-system settings ───────────────────────────────────────────
+
+def test_per_system_arguments_reach_the_command(plain):
+    """"Always start PCSX2 fullscreen" without editing PCSX2, or repeating it
+    on every game."""
+    command = build_command(
+        kind="emulator", target="/roms/game.iso", profile=plain,
+        emulator_path="/usr/bin/pcsx2-qt", system="ps2",
+        system_args=["-fullscreen"],
+    )
+
+    assert command == ["/usr/bin/pcsx2-qt", "/roms/game.iso", "-fullscreen"]
+
+
+def test_per_system_arguments_are_not_applied_to_other_launch_kinds(plain):
+    """They describe how to run an emulator; appending them to a Steam URL or
+    a native binary would be nonsense."""
+    command = build_command(
+        kind="native", target="/games/hades", profile=plain,
+        system_args=["-fullscreen"],
+    )
+
+    assert command == ["/games/hades"]
+
+
+def test_narrower_settings_come_after_wider_ones(plain):
+    """System, then the game's own, then the profile's — so the more specific
+    one is what an emulator sees last."""
+    from rose_gamelab.core.profiles import LaunchProfile
+
+    profile = LaunchProfile(extra_args="--profile-arg")
+    command = build_command(
+        kind="emulator", target="/roms/g.iso", profile=profile,
+        emulator_path="/usr/bin/pcsx2-qt", system="ps2",
+        system_args=["--system-arg"], args="--game-arg",
+    )
+
+    assert command[-3:] == ["--system-arg", "--game-arg", "--profile-arg"]
+
+
+def test_a_configured_emulator_overrides_detection(library, profiles, db, tmp_path):
+    """Detection is right nearly always, and "nearly" is the problem: someone
+    with two Xenia builds installed has a reason for wanting a particular one."""
+    from rose_gamelab.core.system_settings import SystemSettingsStore
+
+    chosen = tmp_path / "xenia_canary"
+    chosen.write_text("#!/bin/sh\n")
+    settings = SystemSettingsStore(db)
+    settings.set("xbox360", emulator_path=str(chosen))
+
+    launcher = Launcher(library, profiles, system_settings=settings)
+
+    assert launcher.resolve_emulator("xbox360") == [str(chosen)]
+
+
+def test_an_emulator_that_has_been_uninstalled_falls_back_to_detection(
+    library, profiles, db
+):
+    """Rather than failing the launch with "no such file"."""
+    from rose_gamelab.core.system_settings import SystemSettingsStore
+
+    settings = SystemSettingsStore(db)
+    settings.set("ps2", emulator_path="/opt/gone/pcsx2")
+
+    launcher = Launcher(library, profiles, system_settings=settings)
+
+    assert "ps2" not in launcher.emulator_paths
+
+
+def test_unparseable_arguments_cost_the_arguments_not_the_launch(db):
+    """A stray quote in a settings box should not stop a game starting."""
+    from rose_gamelab.core.system_settings import SystemSettingsStore
+
+    settings = SystemSettingsStore(db)
+    settings.set("ps2", extra_args='--broken "unclosed')
+
+    assert settings.arguments_for("ps2") == []

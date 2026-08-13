@@ -92,6 +92,11 @@ stays.
   about which button is which without configuring any of them
 - Per-game controller overrides and player order, so the arcade stick drives
   arcade games and you decide who is player one
+- Controller mappings export to a file and import from one, so a friend with
+  the same pad does not have to map it again
+- Per-system emulator choice and arguments: pick which of two installed
+  emulators runs a system, and pass it "always fullscreen" once instead of
+  per game
 - Battery and connection status for pads and wireless peripherals, in both the
   desktop window and Big Picture
 - Big Picture mode: fullscreen, high-contrast, keyboard and mouse navigable
@@ -109,6 +114,11 @@ stays.
   (`rose-gamelab verify`; you supply the DAT files)
 - An in-game panel on Shift+Tab: screenshots, saves, achievements and pad
   battery over a running game
+- **A cleanup pass** — `rose-gamelab cleanup` finds missing files, duplicates,
+  games with no emulator installed and artwork nothing refers to. It reports by
+  default; `--fix` only ever touches GameLab's own cache, never your games
+- **`rose-gamelab doctor`** — one page describing what GameLab can see on this
+  machine, meant to be pasted into a bug report
 - Rip a CD or DVD to a `.bin`/`.cue` or `.iso` and add it to the library, and
   burn your own DRM-free images back to disc with a read-back verification pass
 
@@ -276,6 +286,11 @@ rose-gamelab scan ~/ROMs/snes --system snes
 rose-gamelab find-art             # download covers and metadata
 rose-gamelab list --system ps1
 rose-gamelab export-steam         # add games to Steam (close Steam first)
+rose-gamelab doctor               # what GameLab sees here — paste into bug reports
+rose-gamelab cleanup              # what has gone wrong in the library
+rose-gamelab verify --dats ~/dats # check ROMs against No-Intro/Redump
+rose-gamelab controllers list     # pads seen, and the mappings saved for them
+rose-gamelab system ps2 --args "-fullscreen"
 ```
 
 ## Development
@@ -291,7 +306,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1251 tests, none of which touch the network or require a controller, an optical
+1306 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing

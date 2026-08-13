@@ -145,6 +145,7 @@ class Library:
         collection_id: Optional[int] = None,
         tag: Optional[str] = None,
         favorites_only: bool = False,
+        played_only: bool = False,
         include_hidden: bool = False,
         hidden_only: bool = False,
         search: Optional[str] = None,
@@ -186,6 +187,12 @@ class Library:
             joins += " JOIN collection_games cg ON cg.game_id = g.id"
             where.append("cg.collection_id = ?")
             params.append(collection_id)
+
+        if played_only:
+            # Sorting by last_played is not the same as filtering to games that
+            # have one: the sidebar's "Recently Played" listed every game in the
+            # library, with the never-played ones merely at the bottom.
+            where.append("g.last_played IS NOT NULL")
 
         if tag:
             joins += (

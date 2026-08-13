@@ -272,3 +272,107 @@ def test_the_launch_environment_carries_every_pad(store):
 
 def test_no_pads_means_no_environment(store):
     assert store.sdl_environment([]) == {}
+
+
+# ── Sharing ───────────────────────────────────────────────────────
+
+def test_a_profile_survives_a_round_trip(store, tmp_path, db):
+    """Mapping a pad is tedious and the result is not personal — anyone with
+    the same controller wants the same file."""
+    from rose_gamelab.core.controller_profiles import ControllerProfileStore
+    from rose_gamelab.db.database import Database
+
+    original = store.bind(pad())
+    assert store.export_profiles(tmp_path / "pads.json") == 1
+
+    other_db = Database(tmp_path / "other.db")
+    other = ControllerProfileStore(other_db)
+    summary = other.import_profiles(tmp_path / "pads.json")
+
+    assert summary.imported == 1
+    assert other.for_guid(original.guid).mapping == original.mapping
+    other_db.close()
+
+
+def test_importing_does_not_overwrite_your_own_mapping(store, tmp_path):
+    """Someone who corrected their own mapping should not lose it to a
+    friend's file that happens to cover the same pad."""
+    store.bind(pad())
+    store.export_profiles(tmp_path / "theirs.json")
+
+    mine = store.for_device(pad())
+    mine.mapping = "my-corrected-mapping"
+    store.save(mine)
+
+    summary = store.import_profiles(tmp_path / "theirs.json")
+
+    assert summary.kept == 1
+    assert store.for_device(pad()).mapping == "my-corrected-mapping"
+
+
+def test_overwrite_is_available_when_asked_for(store, tmp_path):
+    store.bind(pad())
+    store.export_profiles(tmp_path / "theirs.json")
+    mine = store.for_device(pad())
+    mine.mapping = "mine"
+    store.save(mine)
+
+    store.import_profiles(tmp_path / "theirs.json", overwrite=True)
+
+    assert store.for_device(pad()).mapping != "mine"
+
+
+def test_player_assignment_is_not_shared(store, tmp_path):
+    """Which pad is player one is about one sofa, not about the pad."""
+    import json
+
+    store.bind(pad())
+    store.export_profiles(tmp_path / "pads.json")
+
+    payload = json.loads((tmp_path / "pads.json").read_text())
+
+    assert "player" not in payload["profiles"][0]
+
+
+def test_importing_something_that_is_not_ours_says_so(store, tmp_path):
+    (tmp_path / "junk.json").write_text('{"format": "some-other-tool"}')
+
+    summary = store.import_profiles(tmp_path / "junk.json")
+
+    assert summary.imported == 0
+    assert "not a Rose GameLab" in summary.summary
+
+
+def test_importing_broken_json_does_not_raise(store, tmp_path):
+    (tmp_path / "broken.json").write_text("{not json at all")
+
+    summary = store.import_profiles(tmp_path / "broken.json")
+
+    assert summary.errors
+    assert summary.imported == 0
+
+
+def test_importing_a_missing_file_does_not_raise(store, tmp_path):
+    assert store.import_profiles(tmp_path / "nope.json").errors
+
+
+def test_entries_with_no_mapping_are_skipped(store, tmp_path):
+    import json
+
+    (tmp_path / "empty.json").write_text(json.dumps({
+        "format": "rose-gamelab-controller-profiles",
+        "version": 1,
+        "profiles": [{"name": "Nothing", "guid": "a" * 32, "mapping": ""}],
+    }))
+
+    summary = store.import_profiles(tmp_path / "empty.json")
+
+    assert summary.skipped == 1
+    assert summary.imported == 0
+
+
+def test_only_the_asked_for_profiles_are_exported(store, tmp_path):
+    first = store.bind(pad())
+    store.bind(pad(**XBOX))
+
+    assert store.export_profiles(tmp_path / "one.json", guids=[first.guid]) == 1

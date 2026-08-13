@@ -33,6 +33,7 @@ from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
 
 if TYPE_CHECKING:                    # imported lazily, to keep launching light
     from rose_gamelab.core.controller_profiles import ControllerProfileStore
+    from rose_gamelab.core.system_settings import SystemSettingsStore
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ def build_command(
     emulator_path: Optional[list[str] | str] = None,
     args: Optional[str] = None,
     system: Optional[str] = None,
+    system_args: Optional[list[str]] = None,
     retroarch_path: Optional[list[str] | str] = None,
     core_path: Optional[str] = None,
     silent_steam: bool = False,
@@ -196,6 +198,14 @@ def build_command(
     else:
         raise LaunchError(f"Unknown launch type: {kind}")
 
+    # Per-system arguments first, then the game's own, then the profile's —
+    # widest scope to narrowest, so the more specific setting is the one an
+    # emulator sees last and therefore the one that wins where they conflict.
+    # Only for emulator launches: these describe how to run an emulator, and
+    # appending them to a Steam URL or a native binary would be nonsense.
+    if system_args and kind == "emulator":
+        command.extend(system_args)
+
     if args:
         command.extend(shlex.split(args))
 
@@ -219,6 +229,7 @@ class Launcher:
         silent_steam: bool = False,
         configure_controllers: bool = True,
         controller_profiles: Optional["ControllerProfileStore"] = None,
+        system_settings: Optional["SystemSettingsStore"] = None,
     ) -> None:
         self.library = library
         self.profiles = profiles
@@ -233,6 +244,12 @@ class Launcher:
         # Saved pad layouts, player order and per-game overrides. Optional so a
         # bare Launcher still configures controllers from the database alone.
         self.controller_profiles = controller_profiles
+        # Per-system emulator choice and arguments. When present it also fills
+        # in `emulator_paths`, which is what finally makes that parameter mean
+        # something — nothing populated it before.
+        self.system_settings = system_settings
+        if system_settings is not None and not self.emulator_paths:
+            self.emulator_paths = system_settings.emulator_paths()
         self.running: dict[int, GameProcess] = {}
 
     # ── Resolution ────────────────────────────────────────────────
@@ -421,6 +438,10 @@ class Launcher:
             emulator_path=emulator_path,
             args=option["args"],
             system=game.system,
+            system_args=(
+                self.system_settings.arguments_for(game.system)
+                if self.system_settings is not None else None
+            ),
             retroarch_path=self.resolve_retroarch() if core_path else None,
             core_path=core_path,
             silent_steam=self.silent_steam,

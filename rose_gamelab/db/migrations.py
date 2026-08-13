@@ -361,6 +361,29 @@ MIGRATIONS: list[tuple[int, str, str]] = [
         CREATE INDEX idx_games_playtime    ON games(play_seconds);
         """,
     ),
+    (
+        6,
+        "per-system emulator choice and arguments",
+        """
+        -- Which emulator runs a system, and what to pass it. Both were
+        -- half-present before: `Launcher` accepted an `emulator_paths` mapping
+        -- that nothing ever populated, so detection's pick was final and there
+        -- was no way to say "use Xenia Canary for this system, not Edge", or
+        -- "always start PCSX2 fullscreen".
+        --
+        -- Keyed by system id, which is what every lookup in the codebase uses.
+        -- The old config file keyed some of these by emulator name and those
+        -- entries could never be read back; see config.py.
+        CREATE TABLE system_settings (
+            system        TEXT PRIMARY KEY,
+            -- Absolute path to an emulator binary, overriding detection.
+            emulator_path TEXT,
+            -- Appended to the command line for every game on this system.
+            extra_args    TEXT,
+            updated_at    TEXT NOT NULL
+        );
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)
