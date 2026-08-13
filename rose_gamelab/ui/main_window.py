@@ -60,7 +60,7 @@ from rose_gamelab.ui.widgets.detail_panel import DetailPanel
 from rose_gamelab.ui.widgets.game_grid import GameGrid
 from rose_gamelab.ui.widgets.game_page import GamePage
 from rose_gamelab.ui.widgets.sidebar import Sidebar
-from rose_gamelab.ui.worker import Worker
+from rose_gamelab.ui.worker import _ABANDONED, Worker
 
 if TYPE_CHECKING:                    # imported lazily at runtime
     from rose_gamelab.metadata.retroachievements import RetroAchievementsProvider
@@ -140,6 +140,14 @@ class MainWindow(QMainWindow):
         elif self.preferences.art_on_start:
             # Art is a separate promise from finding games.
             QTimer.singleShot(400, self.scrape_missing_art_quietly)
+
+        # Achievements are earned in the emulator, and nothing tells GameLab
+        # when that happens — so without this the numbers on a game page are
+        # whatever was true the last time somebody opened that particular game.
+        # Last, and quietly: it needs credentials, does nothing without them,
+        # and must never be the reason the window is slow to appear.
+        if self.preferences.achievements_on_start:
+            QTimer.singleShot(1500, self.refresh_achievements_quietly)
 
     # ── Construction ──────────────────────────────────────────────
 
@@ -553,6 +561,74 @@ class MainWindow(QMainWindow):
                 self.open_game_page(game_id)
 
         self._run(work, "Fetching achievements…", done)
+
+    def refresh_achievements_quietly(self) -> None:
+        """Startup refresh: says nothing when there is nothing to say."""
+        self.refresh_all_achievements(quietly=True)
+
+    def refresh_all_achievements(self, *, quietly: bool = False) -> None:
+        """Bring every already-linked game's achievement progress up to date.
+
+        Only games that have been matched to RetroAchievements before are
+        refreshed. Matching is the expensive half — it hashes or searches per
+        game — and doing that for a whole library on every launch would be a
+        long, rate-limited crawl for the sake of games that mostly are not on
+        RetroAchievements at all. Progress, by contrast, is one cheap call per
+        linked game and is the part that actually goes stale: achievements are
+        earned in the emulator, and nothing tells GameLab when that happens.
+
+        A game gains its link the first time its page is opened, or when
+        `Update achievements` is used, so the set grows as the library is used.
+        """
+        provider = self._achievements_provider()
+        if not provider.available():
+            if not quietly:
+                QMessageBox.information(
+                    self, "RetroAchievements",
+                    "Add your RetroAchievements username and API key in "
+                    "Settings → RetroAchievements first.",
+                )
+            return
+
+        linked = self.db.query(
+            "SELECT id, title, ra_game_id FROM games"
+            " WHERE ra_game_id IS NOT NULL AND hidden = 0"
+            " ORDER BY last_played IS NULL, last_played DESC"
+        )
+        if not linked:
+            if not quietly:
+                self.status.setText(
+                    "No games are linked to RetroAchievements yet — open one and "
+                    "use Update achievements."
+                )
+            return
+
+        def work(report):
+            from rose_gamelab.metadata.retroachievements import save_achievements
+
+            updated = 0
+            for index, row in enumerate(linked, start=1):
+                report(f"Achievements: {row['title']} ({index} of {len(linked)})")
+                try:
+                    found = provider.achievements(row["ra_game_id"])
+                except Exception:
+                    # One game failing must not cost the rest. The provider
+                    # rate-limits itself, so a long library is slow, not fatal.
+                    logger.exception("could not refresh achievements for %s", row["title"])
+                    continue
+                save_achievements(self.db, row["id"], found)
+                updated += 1
+            return updated
+
+        def done(updated):
+            self.status.setText(
+                f"Achievements up to date for {updated} game(s)"
+                if updated else "Could not refresh achievements"
+            )
+            if self.pages.currentWidget() is self.game_page and self.game_page.game:
+                self.open_game_page(self.game_page.game.id)
+
+        self._run(work, "Refreshing achievements…", done)
 
     def _match_retroachievements(self, game) -> Optional[int]:
         """Find this game on RetroAchievements — by hash where we can, by name otherwise.
@@ -1280,11 +1356,29 @@ class MainWindow(QMainWindow):
             on_done(result)
 
     def _teardown_thread(self) -> None:
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(3000)
-            self._thread = None
-            self._worker = None
+        """End the worker thread, and never abandon a running one to Python.
+
+        `quit()` ends a thread's event loop; it cannot interrupt work already
+        running, so the worker is asked to cancel as well. If it still has not
+        finished, the reference is kept — dropping it lets Python collect a
+        QThread that is still running, which Qt reports as "destroyed while
+        thread is still running" and which can take the process down. Closing
+        GameLab a second after opening it, while the startup jobs are in
+        flight, is exactly when that happens.
+        """
+        if self._thread is None:
+            return
+
+        if self._worker is not None:
+            self._worker.cancel()
+
+        self._thread.quit()
+        if not self._thread.wait(3000):
+            logger.warning("a background job did not stop; leaving it to finish")
+            _ABANDONED.append((self._thread, self._worker))
+
+        self._thread = None
+        self._worker = None
 
     def closeEvent(self, event) -> None:
         # Games keep running; GameLab exiting should not kill what is being

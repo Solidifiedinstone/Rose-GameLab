@@ -154,12 +154,31 @@ class SettingsDialog(QDialog):
         art_note.setWordWrap(True)
         layout.addWidget(art_note)
 
+        self.achievements_on_start = QCheckBox(
+            "Refresh RetroAchievements progress when GameLab opens"
+        )
+        self.achievements_on_start.setChecked(self.preferences.achievements_on_start)
+        self.achievements_on_start.toggled.connect(self._on_startup_changed)
+        layout.addWidget(self.achievements_on_start)
+
+        achievements_note = QLabel(
+            "Achievements are earned in the emulator and nothing tells GameLab "
+            "when that happens, so without this the numbers are from whenever "
+            "you last opened that particular game. Only games already matched "
+            "to RetroAchievements are refreshed, and it does nothing at all "
+            "until you add your API key."
+        )
+        achievements_note.setObjectName("Subtle")
+        achievements_note.setWordWrap(True)
+        layout.addWidget(achievements_note)
+
         layout.addStretch(1)
         return page
 
     def _on_startup_changed(self) -> None:
         self.preferences.scan_on_start = self.scan_on_start.isChecked()
         self.preferences.art_on_start = self.art_on_start.isChecked()
+        self.preferences.achievements_on_start = self.achievements_on_start.isChecked()
         self.preferences.save()
 
     # ── Appearance ────────────────────────────────────────────────

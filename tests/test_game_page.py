@@ -400,3 +400,73 @@ def test_collections_appear_in_the_sidebar(window, game):
 
     keys = [item.key for item in window.sidebar._items]
     assert any(key.startswith("collection:") for key in keys)
+
+
+# ── Refreshing achievements on launch ─────────────────────────────
+
+def test_the_launch_refresh_only_touches_linked_games(window, game, monkeypatch):
+    """Matching a game to RetroAchievements is the expensive half — a hash or a
+    search per game. Doing that for a whole library on every launch would be a
+    long rate-limited crawl for games that mostly are not on RA at all."""
+    asked = []
+
+    class FakeProvider:
+        def available(self):
+            return True
+
+        def achievements(self, ra_game_id, user=None):
+            asked.append(ra_game_id)
+            return []
+
+    unlinked = window.library.add_game(title="Never Matched", system="snes")
+    window.db.execute("UPDATE games SET ra_game_id = 4242 WHERE id = ?", (game,))
+    monkeypatch.setattr(window, "_achievements_provider", FakeProvider)
+
+    window.refresh_all_achievements(quietly=True)
+
+    # Pumped rather than waited on: the worker reports back through queued
+    # connections, so blocking this thread on the worker deadlocks both until
+    # the timeout expires. Waited to completion rather than to the first
+    # result, so the window is not torn down with work still in flight.
+    import time
+    deadline = time.monotonic() + 5
+    while window._thread is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+
+    assert asked == [4242]
+    assert unlinked not in asked
+
+
+def test_the_launch_refresh_says_nothing_without_credentials(window, monkeypatch):
+    """It runs unprompted on every launch; a dialog would be an ambush."""
+    class Unavailable:
+        def available(self):
+            return False
+
+    monkeypatch.setattr(window, "_achievements_provider", Unavailable)
+    shown = []
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.information",
+        lambda *a, **k: shown.append(a),
+    )
+
+    window.refresh_all_achievements(quietly=True)
+
+    assert shown == []
+
+
+def test_asking_for_it_by_hand_does_explain_the_missing_key(window, monkeypatch):
+    class Unavailable:
+        def available(self):
+            return False
+
+    monkeypatch.setattr(window, "_achievements_provider", Unavailable)
+    shown = []
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.information",
+        lambda *a, **k: shown.append(a),
+    )
+
+    window.refresh_all_achievements(quietly=False)
+
+    assert shown

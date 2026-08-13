@@ -316,3 +316,4 @@ def test_art_fetching_is_a_separate_choice(tmp_path):
     restored = Preferences.load(tmp_path / "prefs.json")
     assert restored.scan_on_start is True
     assert restored.art_on_start is False
+

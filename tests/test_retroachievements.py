@@ -662,3 +662,37 @@ def test_systems_retroachievements_does_not_cover_are_known():
     assert on_retroachievements("snes")
     assert not on_retroachievements("ps3")
     assert not on_retroachievements("pc")
+
+
+# ── Refreshing on launch ──────────────────────────────────────────
+#
+# Achievements are earned inside the emulator and nothing tells GameLab when
+# that happens, so a game page shows whatever was true the last time somebody
+# opened that one game. Refreshing on launch is what keeps the numbers honest.
+
+def test_refreshing_on_launch_is_a_preference(tmp_path):
+    from rose_gamelab.ui.preferences import Preferences
+
+    prefs = Preferences()
+    assert prefs.achievements_on_start is True     # useless without a key anyway
+
+    prefs.achievements_on_start = False
+    path = tmp_path / "prefs.json"
+    prefs.save(path)
+
+    assert Preferences.load(path).achievements_on_start is False
+
+
+def test_the_preference_survives_a_file_that_predates_it(tmp_path):
+    """Someone upgrading has a preferences file with no such key in it."""
+    import json
+
+    from rose_gamelab.ui.preferences import Preferences
+
+    path = tmp_path / "prefs.json"
+    path.write_text(json.dumps({"theme": "btop", "scan_on_start": False}))
+
+    prefs = Preferences.load(path)
+
+    assert prefs.achievements_on_start is True
+    assert prefs.scan_on_start is False

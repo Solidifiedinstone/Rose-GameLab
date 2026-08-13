@@ -185,6 +185,12 @@ class Preferences:
     #: Fetch art for anything missing it, unprompted. Kept separate: someone can
     #: reasonably want new games found but not want the network touched.
     art_on_start: bool = True
+    #: Refresh RetroAchievements progress when the app opens, so the numbers on
+    #: a game page are what the account says rather than whatever was true the
+    #: last time somebody opened that one game by hand. Does nothing at all
+    #: without credentials, so it is on by default and simply stays quiet for
+    #: everyone who has not set them.
+    achievements_on_start: bool = True
 
     # ── Appearance ────────────────────────────────────────────────
 
@@ -230,6 +236,7 @@ class Preferences:
             "style_overrides": dict(self.style_overrides),
             "scan_on_start": self.scan_on_start,
             "art_on_start": self.art_on_start,
+            "achievements_on_start": self.achievements_on_start,
         }
 
     @classmethod
@@ -249,7 +256,7 @@ class Preferences:
             style=style if style in STYLES else DEFAULT_STYLE,
         )
 
-        for name in ("scan_on_start", "art_on_start"):
+        for name in ("scan_on_start", "art_on_start", "achievements_on_start"):
             if name in data:
                 setattr(prefs, name, bool(data[name]))
 

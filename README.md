@@ -88,7 +88,10 @@ stays.
 - Big Picture mode: fullscreen, high-contrast, keyboard and mouse navigable
 - Playtime tracking. Launches that hand off to another client (Steam, Heroic,
   Lutris) are marked untracked rather than recording a wrong number
-- RetroAchievements support (needs your own RetroAchievements API key)
+- RetroAchievements support (needs your own RetroAchievements API key), with
+  progress refreshed when GameLab opens — achievements are earned inside the
+  emulator and nothing tells a launcher when that happens. Switchable off in
+  Settings → Startup
 
 **Managing them**
 - Save file and save state management: found where your emulators keep them,
@@ -291,7 +294,7 @@ python -m venv --system-site-packages .venv
 .venv/bin/python -m pytest tests/ -q
 ```
 
-1238 tests, none of which touch the network or require a controller, an optical
+1253 tests, none of which touch the network or require a controller, an optical
 drive, or any launcher to be installed.
 
 ## Contributing
