@@ -38,6 +38,23 @@ def _isolated_config(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _clean_emulator_detection():
+    """Start every test with emulator detection uncached.
+
+    Detection memoises what is on PATH, which Flatpaks are installed and which
+    AppImages are lying about, because it is asked the same questions hundreds
+    of times per screen. That cache must not outlive a test: one test that
+    monkeypatches `shutil.which` would otherwise decide what a later test sees,
+    making results depend on the order tests happen to run in.
+    """
+    from rose_gamelab.core import emulator_detect
+
+    emulator_detect.refresh()
+    yield
+    emulator_detect.refresh()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_environment(monkeypatch):
     """Clear credential environment variables.
 

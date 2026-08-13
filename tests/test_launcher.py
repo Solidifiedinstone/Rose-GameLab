@@ -172,8 +172,8 @@ def test_does_not_force_debug_logging():
 
 
 def test_existing_environment_is_inherited():
-    env = LaunchProfile().environment({"HOME": "/home/gavin"})
-    assert env["HOME"] == "/home/gavin"
+    env = LaunchProfile().environment({"HOME": "/home/player"})
+    assert env["HOME"] == "/home/player"
 
 
 # ── Profile storage ───────────────────────────────────────────────
@@ -381,3 +381,100 @@ def test_ensure_default_promotes_an_existing_profile(profiles):
 
     assert recovered.name == "Handheld"
     assert len(profiles.list_profiles()) == 1
+
+
+# ── RetroArch fallback ────────────────────────────────────────────
+
+def test_flatpak_retroarch_command_is_kept_whole(plain):
+    """A Flatpak RetroArch is three words; joining it into one path fails."""
+    command = build_command(
+        kind="emulator", target="/roms/game.sfc", profile=plain,
+        retroarch_path=["flatpak", "run", "org.libretro.RetroArch"],
+        core_path="/cores/snes9x_libretro.so",
+    )
+    assert command == [
+        "flatpak", "run", "org.libretro.RetroArch",
+        "-L", "/cores/snes9x_libretro.so", "/roms/game.sfc",
+    ]
+
+
+def test_cores_are_found_without_the_user_configuring_a_directory(
+    library, profiles, tmp_path, monkeypatch
+):
+    """Regression: nothing ever set `libretro_core_dir`, so the RetroArch
+    fallback could not launch anything — the interface listed RetroArch as the
+    emulator for a system and then raised "no emulator configured"."""
+    cores = tmp_path / "cores"
+    cores.mkdir()
+    (cores / "snes9x_libretro.so").write_bytes(b"")
+    monkeypatch.setattr(
+        "rose_gamelab.core.launcher.LIBRETRO_CORE_DIRS", (str(cores),)
+    )
+
+    launcher = Launcher(library, profiles)
+    assert launcher.resolve_core("snes", search_default_dirs=True) == str(
+        cores / "snes9x_libretro.so"
+    )
+
+
+def test_default_core_directories_are_only_a_fallback(library, profiles, tmp_path, monkeypatch):
+    """A standalone emulator is the better run, so it is not undercut."""
+    cores = tmp_path / "cores"
+    cores.mkdir()
+    (cores / "snes9x_libretro.so").write_bytes(b"")
+    monkeypatch.setattr(
+        "rose_gamelab.core.launcher.LIBRETRO_CORE_DIRS", (str(cores),)
+    )
+
+    launcher = Launcher(library, profiles)
+    assert launcher.resolve_core("snes") is None
+
+
+def test_a_configured_core_directory_is_used_alone(library, profiles, tmp_path, monkeypatch):
+    """Someone who pointed GameLab at a core folder gets the cores in it."""
+    configured = tmp_path / "mine"
+    configured.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "snes9x_libretro.so").write_bytes(b"")
+    monkeypatch.setattr(
+        "rose_gamelab.core.launcher.LIBRETRO_CORE_DIRS", (str(elsewhere),)
+    )
+
+    launcher = Launcher(library, profiles, libretro_core_dir=str(configured))
+    assert launcher.resolve_core("snes", search_default_dirs=True) is None
+
+
+def test_no_core_is_claimed_for_systems_retroarch_cannot_run(
+    library, profiles, tmp_path, monkeypatch
+):
+    """'xenia' is a standalone emulator id, not a libretro core."""
+    cores = tmp_path / "cores"
+    cores.mkdir()
+    (cores / "xenia_libretro.so").write_bytes(b"")
+    monkeypatch.setattr(
+        "rose_gamelab.core.launcher.LIBRETRO_CORE_DIRS", (str(cores),)
+    )
+
+    launcher = Launcher(library, profiles)
+    assert launcher.resolve_core("xbox360", search_default_dirs=True) is None
+
+
+def test_retroarch_is_detected_when_no_path_is_configured(library, profiles, monkeypatch):
+    monkeypatch.setattr(
+        "rose_gamelab.core.emulator_detect.retroarch_command",
+        lambda: ("flatpak", "run", "org.libretro.RetroArch"),
+    )
+    launcher = Launcher(library, profiles)
+    assert launcher.resolve_retroarch() == [
+        "flatpak", "run", "org.libretro.RetroArch"
+    ]
+
+
+def test_a_configured_retroarch_path_wins(library, profiles, monkeypatch):
+    monkeypatch.setattr(
+        "rose_gamelab.core.emulator_detect.retroarch_command",
+        lambda: ("/usr/bin/retroarch",),
+    )
+    launcher = Launcher(library, profiles, retroarch_path="/opt/retroarch/bin/retroarch")
+    assert launcher.resolve_retroarch() == ["/opt/retroarch/bin/retroarch"]

@@ -37,6 +37,18 @@ logger = logging.getLogger(__name__)
 # process we spawn is not the game and cannot be timed.
 HANDOFF_KINDS = {"steam", "heroic", "lutris"}
 
+# Where RetroArch keeps its libretro cores. Checked in order, and the Flatpak
+# location is included because a Flatpak RetroArch keeps cores inside its own
+# sandbox and nothing lands in the usual paths.
+LIBRETRO_CORE_DIRS = (
+    "~/.config/retroarch/cores",
+    "~/.local/share/retroarch/cores",
+    "~/.var/app/org.libretro.RetroArch/config/retroarch/cores",
+    "/usr/lib/libretro",
+    "/usr/lib64/libretro",
+    "/usr/local/lib/libretro",
+)
+
 
 class LaunchError(Exception):
     """Raised when a game cannot be started. The message is shown to the user,
@@ -96,7 +108,7 @@ def build_command(
     emulator_path: Optional[list[str] | str] = None,
     args: Optional[str] = None,
     system: Optional[str] = None,
-    retroarch_path: Optional[str] = None,
+    retroarch_path: Optional[list[str] | str] = None,
     core_path: Optional[str] = None,
     silent_steam: bool = False,
 ) -> list[str]:
@@ -162,8 +174,14 @@ def build_command(
 
     elif kind == "emulator":
         if core_path and retroarch_path:
-            # RetroArch with an explicit libretro core.
-            command = [retroarch_path, "-L", core_path, target]
+            # RetroArch with an explicit libretro core. A list, because a
+            # Flatpak RetroArch is `flatpak run org.libretro.RetroArch`.
+            retroarch = (
+                list(retroarch_path)
+                if isinstance(retroarch_path, (list, tuple))
+                else [retroarch_path]
+            )
+            command = [*retroarch, "-L", core_path, target]
         elif emulator_path:
             # A list, since Flatpak emulators are `flatpak run <id> <rom>`.
             command = [*emulator_path, target] if isinstance(emulator_path, list) else [emulator_path, target]
@@ -231,20 +249,53 @@ class Launcher:
         # right libretro core is passed rather than bare RetroArch.
         return None
 
-    def resolve_core(self, system_id: str) -> Optional[str]:
-        """Find a libretro core for a system, if RetroArch is configured."""
-        if not self.libretro_core_dir:
-            return None
+    def resolve_retroarch(self) -> Optional[list[str]]:
+        """How to run RetroArch here, as a command, or None.
 
+        A configured path wins; otherwise RetroArch is detected the same way
+        every other emulator is, which is what makes a Flatpak install usable.
+        """
+        if self.retroarch_path:
+            return [self.retroarch_path]
+
+        command = emulator_detect.retroarch_command()
+        return list(command) if command else None
+
+    def resolve_core(
+        self, system_id: str, *, search_default_dirs: bool = False
+    ) -> Optional[str]:
+        """Find a libretro core for a system.
+
+        Only the configured core directory is searched unless
+        `search_default_dirs` is set, which keeps a user who pointed GameLab at
+        a core folder getting exactly the cores in it. The standard locations
+        are searched as a fallback for systems with no standalone emulator
+        installed: before that, GameLab listed RetroArch as the emulator for
+        those systems and then refused to launch, because nothing ever set a
+        core directory in the first place.
+        """
         system = get_system(system_id)
         if not system or not system.default_core:
             return None
 
-        directory = Path(self.libretro_core_dir)
-        for suffix in (".so", ".dll", ".dylib"):
-            candidate = directory / f"{system.default_core}_libretro{suffix}"
-            if candidate.is_file():
-                return str(candidate)
+        # 'default_core' holds a standalone emulator id for the modern systems,
+        # and there is no libretro core by that name to find.
+        if system_id in emulator_detect.NO_LIBRETRO_CORE:
+            return None
+
+        if self.libretro_core_dir:
+            directories = [self.libretro_core_dir]
+        elif search_default_dirs:
+            directories = list(LIBRETRO_CORE_DIRS)
+        else:
+            return None
+
+        for entry in directories:
+            directory = Path(entry).expanduser()
+            for suffix in (".so", ".dll", ".dylib"):
+                candidate = directory / f"{system.default_core}_libretro{suffix}"
+                if candidate.is_file():
+                    return str(candidate)
 
         return None
 
@@ -298,16 +349,28 @@ class Launcher:
                 profile.name, ", ".join(missing),
             )
 
+        emulator_path = (
+            self.resolve_emulator(game.system) if kind == "emulator" else None
+        )
+        # Fall back to a libretro core only when no standalone emulator is
+        # installed — a standalone emulator is the better run of the two, and
+        # is what detection already picked.
+        core_path = (
+            self.resolve_core(game.system, search_default_dirs=emulator_path is None)
+            if kind == "emulator"
+            else None
+        )
+
         command = build_command(
             kind=kind,
             target=target,
             profile=profile,
             emulator=option["emulator"],
-            emulator_path=self.resolve_emulator(game.system) if kind == "emulator" else None,
+            emulator_path=emulator_path,
             args=option["args"],
             system=game.system,
-            retroarch_path=self.retroarch_path,
-            core_path=self.resolve_core(game.system) if kind == "emulator" else None,
+            retroarch_path=self.resolve_retroarch() if core_path else None,
+            core_path=core_path,
             silent_steam=self.silent_steam,
         )
 

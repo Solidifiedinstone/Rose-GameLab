@@ -6,6 +6,18 @@ from typing import Any, Optional
 
 import yaml
 
+from rose_gamelab.core.emulator import SYSTEMS
+
+# Every emulated system, with no override set. Generated from the system
+# registry rather than typed out: the hand-written list had drifted badly —
+# eight of its keys ("xenia", "sega_sat", "wslan", "nintendo_3ds" …) were
+# emulator names or typos rather than system ids, and twenty-two real systems
+# were missing. A path saved under a key that is not a system id is never read
+# back, because every lookup is by system id.
+_EMULATOR_OVERRIDES = {
+    system_id: None for system_id in SYSTEMS if system_id != "pc"
+}
+
 DEFAULT_CONFIG = {
     # Where GameLab stores its own state
     "config_dir": str(Path.home() / ".config" / "rose-gamelab"),
@@ -16,40 +28,7 @@ DEFAULT_CONFIG = {
 
     # ── Emulator paths ────────────────────────────────────────────
     # Maps system id -> path to emulator binary
-    "emulators": {
-        "snes":        None,                # SNES9X
-        "gba":         None,                # mGBA
-        "nds":         None,                #melonDS / DeSmuME
-        "ps1":         None,                # DuckStation / PyGameStation
-        "ps2":         None,                # PCSX2
-        "psp":         None,                # PPSSPP
-        "3ds":         None,                # Citra
-        "wii":         None,                # Dolphin
-        "wiiu":        None,                # Cemu
-        "switch":      None,                # Yuzu / Ryujinx / Sudomod Switch
-        "xbox":        None,                # Xemu
-        "dreamcast":   None,                # Flycast /redream
-        "ps4":         None,                # ShadPS4
-        "ps3":         None,                # RPCS3
-        "xenia":       None,                # Xenia / Xenia Canary
-        "n64":         None,                # ParaLLEl / Mupen64Plus
-        "wslan":         None,               # WenQu / Mupen64Plus
-       "vba":         None,                # BGB / Gambatte
-        "atari2600":   None,               # Stella
-        "atari800":    None,               # Atari800
-        "intellivision": None,             # NTSCJ/FreeIntv
-        "fds":         None,               # FCEUX (Famicom Disk System)
-        "master_system": None,             # Genesis Plus GX / Gambatte
-        "megadrive":   None,               # Same as above
-        "pc_engine":   None,               # PCEJS / Mednafen
-        "sega_sat":    None,               # Supermodel / YabaSanshiro
-        "arcade":      None,               # MAME
-        "msx":         None,               # fMSX
-        "collec":      None,               # BlueMSX
-        "virtualboy":  None,               # VBAM
-        "nintendo_3ds": None,              # Citra
-        # Add more as needed
-    },
+    "emulators": _EMULATOR_OVERRIDES,
 
     # ── Controller ────────────────────────────────────────────────
     "controller": {
@@ -66,7 +45,8 @@ DEFAULT_CONFIG = {
         "save_state_on_exit": True,
         "load_state_on_start": True,
         "use_libretro_core": False,           # if True, use libretro frontend for all systems
-        "libretro_core_dir": str(Path.home() / ".local" / "share" / "retroarch" / "core"),
+        # RetroArch's folder is "cores", plural — the singular path never existed.
+        "libretro_core_dir": str(Path.home() / ".config" / "retroarch" / "cores"),
         "retroarch_bin": None,                 # path to retroarch binary (fallback frontend)
     },
 
