@@ -260,14 +260,70 @@ def install_retroarch(
 
 # ── Cores ─────────────────────────────────────────────────────────
 
+#: Where RetroArch keeps its own configuration, which is the only authority on
+#: where it looks for cores and BIOS files.
+CONFIG_FILES = (
+    "~/.var/app/org.libretro.RetroArch/config/retroarch/retroarch.cfg",
+    "~/.config/retroarch/retroarch.cfg",
+)
+
+
+def config_file() -> Optional[Path]:
+    """RetroArch's own configuration file, if it has one."""
+    order = CONFIG_FILES if is_flatpak() else tuple(reversed(CONFIG_FILES))
+    for entry in order:
+        path = Path(entry).expanduser()
+        if path.is_file():
+            return path
+    return None
+
+
+def configured_directory(setting: str) -> Optional[Path]:
+    """Read a directory out of RetroArch's configuration.
+
+    Asking RetroArch where it looks beats guessing. Guessing put cores in
+    ~/.config/retroarch/cores on a machine whose RetroArch is a Flatpak and
+    reads only from inside its sandbox: they downloaded perfectly, RetroArch
+    never saw one of them, and nothing said why.
+    """
+    path = config_file()
+    if path is None:
+        return None
+
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            name, separator, value = line.partition("=")
+            if separator and name.strip() == setting:
+                value = value.strip().strip('"')
+                if value and value not in (":", "default"):
+                    return Path(value).expanduser()
+    except OSError as exc:
+        logger.warning("could not read %s: %s", path, exc)
+
+    return None
+
+
 def core_directory(*, create: bool = False) -> Optional[Path]:
     """Where cores belong on this machine.
 
-    A Flatpak RetroArch reads only from inside its own sandbox, so an install
-    into the ordinary location would download perfectly and then be invisible.
+    RetroArch's own `libretro_directory` first, because that is the answer;
+    the known locations are only a fallback for an installation that has not
+    written a configuration yet.
     """
+    configured = configured_directory("libretro_directory")
+    if configured is not None:
+        if configured.is_dir():
+            return configured
+        if create:
+            try:
+                configured.mkdir(parents=True, exist_ok=True)
+                return configured
+            except OSError as exc:
+                logger.warning("could not create %s: %s", configured, exc)
+
     if is_flatpak():
-        candidates = [CORE_DIRECTORIES[1], *CORE_DIRECTORIES]
+        # Never the host path for a Flatpak: it cannot read cores from there.
+        candidates = [CORE_DIRECTORIES[1]]
     else:
         candidates = list(CORE_DIRECTORIES)
 
@@ -286,6 +342,56 @@ def core_directory(*, create: bool = False) -> Optional[Path]:
         logger.warning("could not create the core directory %s: %s", path, exc)
         return None
     return path
+
+
+def system_directory() -> Optional[Path]:
+    """Where RetroArch looks for BIOS files."""
+    configured = configured_directory("system_directory")
+    if configured is not None:
+        return configured
+
+    cores = core_directory()
+    return cores.parent / "system" if cores else None
+
+
+#: Cores that will not run without a BIOS, and the files they want. Without
+#: one, SwanStation does not start — and "crashes on launch" is what that
+#: looks like from the outside, which is why this is checked and said out
+#: loud rather than left for the user to discover.
+BIOS_REQUIRED: dict[str, tuple[str, ...]] = {
+    "swanstation": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
+    "mednafen_psx": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
+    "pcsx_rearmed": ("scph5500.bin", "scph5501.bin", "scph5502.bin"),
+    "mednafen_saturn": ("sega_101.bin", "mpr-17933.bin"),
+    "mednafen_pce": ("syscard3.pce",),
+    "flycast": ("dc_boot.bin", "dc_flash.bin"),
+    "opera": ("panafz1.bin", "panafz10.bin", "goldstar.bin"),
+    "pcsx2": ("ps2-0230a-20080220.bin",),
+}
+
+
+def missing_bios(core: str) -> tuple[str, ...]:
+    """BIOS files a core needs and RetroArch cannot find. Empty when happy.
+
+    A core needing *any one of* its listed files is the usual case, so this
+    reports nothing when at least one is present.
+    """
+    wanted = BIOS_REQUIRED.get(core)
+    if not wanted:
+        return ()
+
+    folder = system_directory()
+    if folder is None or not folder.is_dir():
+        return wanted
+
+    try:
+        present = {path.name.lower() for path in folder.iterdir()}
+    except OSError:
+        return wanted
+
+    if any(name.lower() in present for name in wanted):
+        return ()
+    return wanted
 
 
 def installed_cores(directory: Optional[Path] = None) -> set[str]:

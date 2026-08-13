@@ -189,9 +189,11 @@ class RetroArchTab(QWidget):
 
         if retroarch_present:
             where = retroarch.core_directory()
+            system = retroarch.system_directory()
             self.status.setText(
                 "RetroArch is installed."
                 + (f"\nCores go in {where}" if where else "")
+                + (f"\nBIOS files go in {system}" if system else "")
             )
             self.install_button.setEnabled(False)
             self.install_button.setText("Installed")
@@ -243,7 +245,16 @@ class RetroArchTab(QWidget):
             parts.append(f"{core.game_count} game{'s' if core.game_count != 1 else ''}")
         if core.installed:
             parts.append("installed")
-        return "   ·   ".join(parts) + f"      ({core.name})"
+
+        label = "   ·   ".join(parts) + f"      ({core.name})"
+
+        # Said here rather than left to be discovered. A core that needs a BIOS
+        # and has none does not report that politely — it fails to start, which
+        # from the outside is indistinguishable from the core crashing.
+        missing = retroarch.missing_bios(core.name)
+        if core.installed and missing:
+            label += f"   ⚠ needs a BIOS: {' or '.join(missing)}"
+        return label
 
     def select_owned(self) -> None:
         for core in retroarch.available_cores(self.library):

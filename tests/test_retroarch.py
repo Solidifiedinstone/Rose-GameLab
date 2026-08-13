@@ -296,6 +296,8 @@ def test_a_flatpak_retroarch_gets_its_own_directory(monkeypatch, tmp_path):
     ordinary = tmp_path / ".config/retroarch/cores"
     ordinary.mkdir(parents=True)
 
+    # No configuration, so the known locations are what is left to go on.
+    monkeypatch.setattr(retroarch, "config_file", lambda: None)
     monkeypatch.setattr(retroarch, "is_flatpak", lambda: True)
     monkeypatch.setattr(retroarch, "CORE_DIRECTORIES", (
         str(ordinary), str(sandbox),
@@ -305,6 +307,7 @@ def test_a_flatpak_retroarch_gets_its_own_directory(monkeypatch, tmp_path):
 
 
 def test_no_directory_is_invented_unless_asked(monkeypatch, tmp_path):
+    monkeypatch.setattr(retroarch, "config_file", lambda: None)
     monkeypatch.setattr(retroarch, "is_flatpak", lambda: False)
     monkeypatch.setattr(retroarch, "CORE_DIRECTORIES", (str(tmp_path / "nope"),))
 
@@ -392,3 +395,75 @@ def test_flatpak_reporting_success_without_installing_is_not_believed(monkeypatc
 
     assert not succeeded
     assert "still cannot be found" in message
+
+
+# ── Where RetroArch actually looks ────────────────────────────────
+
+def test_retroarchs_own_configuration_decides_where_cores_go(monkeypatch, tmp_path):
+    """Guessing put cores in ~/.config/retroarch/cores on a machine whose
+    RetroArch is a Flatpak and reads only from its sandbox. They downloaded
+    perfectly, RetroArch never saw one of them, and nothing said why."""
+    cores = tmp_path / "sandbox" / "cores"
+    cores.mkdir(parents=True)
+    config = tmp_path / "retroarch.cfg"
+    config.write_text(f'libretro_directory = "{cores}"\nsystem_directory = "{tmp_path}/system"\n')
+
+    monkeypatch.setattr(retroarch, "config_file", lambda: config)
+
+    assert retroarch.core_directory() == cores
+
+
+def test_the_bios_directory_comes_from_the_same_place(monkeypatch, tmp_path):
+    config = tmp_path / "retroarch.cfg"
+    system = tmp_path / "system"
+    config.write_text(f'system_directory = "{system}"\n')
+    monkeypatch.setattr(retroarch, "config_file", lambda: config)
+
+    assert retroarch.system_directory() == system
+
+
+def test_a_flatpak_never_falls_back_to_the_host_path(monkeypatch):
+    """It cannot read cores from there, so installing into it is worse than
+    failing — the download succeeds and nothing works."""
+    monkeypatch.setattr(retroarch, "config_file", lambda: None)
+    monkeypatch.setattr(retroarch, "is_flatpak", lambda: True)
+
+    directory = retroarch.core_directory(create=False)
+
+    assert directory is None or ".var/app" in str(directory)
+
+
+# ── BIOS ──────────────────────────────────────────────────────────
+
+def test_a_core_needing_a_bios_says_so(monkeypatch, tmp_path):
+    """SwanStation does not start without a PlayStation BIOS, and "does not
+    start" looks exactly like "crashes" from the outside."""
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+
+    assert "scph5500.bin" in retroarch.missing_bios("swanstation")
+
+
+def test_one_of_the_accepted_bios_files_is_enough(monkeypatch, tmp_path):
+    (tmp_path / "scph5501.bin").write_bytes(b"x" * 512)
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+
+    assert retroarch.missing_bios("swanstation") == ()
+
+
+def test_the_check_is_case_insensitive(monkeypatch, tmp_path):
+    (tmp_path / "SCPH5500.BIN").write_bytes(b"x" * 512)
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+
+    assert retroarch.missing_bios("swanstation") == ()
+
+
+def test_a_core_that_needs_no_bios_reports_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path)
+
+    assert retroarch.missing_bios("snes9x") == ()
+
+
+def test_a_missing_system_directory_is_not_a_crash(monkeypatch, tmp_path):
+    monkeypatch.setattr(retroarch, "system_directory", lambda: tmp_path / "nope")
+
+    assert retroarch.missing_bios("swanstation")
