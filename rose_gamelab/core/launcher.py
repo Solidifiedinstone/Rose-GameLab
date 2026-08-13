@@ -24,12 +24,15 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from rose_gamelab.core import emulator_detect
 from rose_gamelab.core.emulator import get_system
 from rose_gamelab.core.library import Library
 from rose_gamelab.core.profiles import LaunchProfile, ProfileStore
+
+if TYPE_CHECKING:                    # imported lazily, to keep launching light
+    from rose_gamelab.core.controller_profiles import ControllerProfileStore
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +217,8 @@ class Launcher:
         retroarch_path: Optional[str] = None,
         libretro_core_dir: Optional[str] = None,
         silent_steam: bool = False,
+        configure_controllers: bool = True,
+        controller_profiles: Optional["ControllerProfileStore"] = None,
     ) -> None:
         self.library = library
         self.profiles = profiles
@@ -223,6 +228,11 @@ class Launcher:
         self.libretro_core_dir = libretro_core_dir
         # Start the Steam client to the tray instead of opening its window.
         self.silent_steam = silent_steam
+        # Hand every SDL-based emulator the layout of the connected pads.
+        self.configure_controllers = configure_controllers
+        # Saved pad layouts, player order and per-game overrides. Optional so a
+        # bare Launcher still configures controllers from the database alone.
+        self.controller_profiles = controller_profiles
         self.running: dict[int, GameProcess] = {}
 
     # ── Resolution ────────────────────────────────────────────────
@@ -299,6 +309,48 @@ class Launcher:
 
         return None
 
+    def controller_environment(
+        self, kind: str, *, game_id: Optional[int] = None
+    ) -> dict[str, str]:
+        """Gamepad layout for the launched process, as environment variables.
+
+        This is what makes a controller work without configuring it in every
+        emulator separately. SDL reads `SDL_GAMECONTROLLERCONFIG` before its own
+        database, and PCSX2, DuckStation, Dolphin, PPSSPP, Flycast, melonDS,
+        RPCS3, Ryujinx and RetroArch's sdl2 driver all read pads through SDL —
+        so one variable configures the lot.
+
+        Skipped for launches that hand off to another client: Steam, Heroic and
+        Lutris start the game themselves, from their own environment, and Steam
+        Input would fight this besides.
+
+        Never raises. A pad that cannot be identified is a reason to launch with
+        SDL's own defaults, not a reason to refuse to start the game.
+        """
+        if not self.configure_controllers or kind in HANDOFF_KINDS:
+            return {}
+
+        try:
+            from rose_gamelab.core import controller_db
+            from rose_gamelab.core.controller import detect_controllers
+
+            devices = detect_controllers()
+            if not devices:
+                return {}
+
+            # Saved profiles and per-game overrides win over a fresh lookup:
+            # a user who corrected their mapping meant it, and a game pinned to
+            # the arcade stick should get the arcade stick.
+            store = self.controller_profiles
+            if store is not None:
+                store.bind_all(devices)
+                return store.sdl_environment(devices, game_id=game_id)
+
+            return controller_db.sdl_environment_for(devices)
+        except Exception:
+            logger.exception("could not work out the controller configuration")
+            return {}
+
     # ── Launching ─────────────────────────────────────────────────
 
     def launch(
@@ -374,7 +426,11 @@ class Launcher:
             silent_steam=self.silent_steam,
         )
 
-        env = profile.environment(dict(os.environ))
+        # Controller configuration goes in beneath the profile, so anyone who
+        # sets SDL_GAMECONTROLLERCONFIG by hand in a launch profile still wins.
+        base_env = dict(os.environ)
+        base_env.update(self.controller_environment(kind, game_id=game_id))
+        env = profile.environment(base_env)
 
         if profile.pre_launch:
             self._run_hook(profile.pre_launch, env)

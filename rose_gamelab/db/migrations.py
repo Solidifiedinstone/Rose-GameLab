@@ -285,6 +285,54 @@ MIGRATIONS: list[tuple[int, str, str]] = [
          WHERE metadata_locked = 1 AND cover_path IS NOT NULL;
         """,
     ),
+    (
+        4,
+        "controller profiles, player order, and per-game overrides",
+        """
+        -- A saved pad layout. `guid` is the SDL GUID the mapping is keyed by,
+        -- which is what both SDL and the community database match on, so a
+        -- profile follows the physical pad rather than whichever port it
+        -- happened to be plugged into.
+        --
+        -- `mapping` is the rendered SDL_GAMECONTROLLERCONFIG line. Storing the
+        -- rendered form rather than the structure means a profile keeps
+        -- working unchanged if the canonical model ever gains a button.
+        CREATE TABLE controller_profiles (
+            id          INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            guid        TEXT NOT NULL,
+            device_name TEXT NOT NULL DEFAULT '',
+            mapping     TEXT NOT NULL,
+            -- 'database' | 'builtin' | 'user': where the layout came from, so
+            -- the interface can distinguish a known-good mapping from a guess.
+            source      TEXT NOT NULL DEFAULT 'user',
+            -- Player 1 is 1, not 0: this is shown to people, not indexed into.
+            player      INTEGER,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+
+        -- One profile per pad model. Re-binding the same pad replaces its
+        -- profile rather than accumulating duplicates that silently disagree.
+        CREATE UNIQUE INDEX idx_controller_profiles_guid ON controller_profiles(guid);
+
+        -- At most one pad per player slot. Without this, two pads could both
+        -- claim player 1 and which one won would depend on row order.
+        CREATE UNIQUE INDEX idx_controller_profiles_player
+            ON controller_profiles(player) WHERE player IS NOT NULL;
+
+        -- A game that wants a specific pad regardless of what else is plugged
+        -- in: an arcade stick for arcade, a Pro Controller for Switch.
+        CREATE TABLE game_controller_profiles (
+            game_id     INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+            profile_id  INTEGER NOT NULL REFERENCES controller_profiles(id) ON DELETE CASCADE,
+            player      INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (game_id, player)
+        );
+
+        CREATE INDEX idx_game_controller_profiles_game ON game_controller_profiles(game_id);
+        """,
+    ),
 ]
 
 SCHEMA_VERSION = max(version for version, _, _ in MIGRATIONS)

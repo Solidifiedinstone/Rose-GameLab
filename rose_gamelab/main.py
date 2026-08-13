@@ -184,6 +184,7 @@ def play(ctx: click.Context, game_id: int) -> None:
     """
     from rich.console import Console
 
+    from rose_gamelab.core.controller_profiles import ControllerProfileStore
     from rose_gamelab.core.launcher import Launcher, LaunchError
     from rose_gamelab.core.library import Library
     from rose_gamelab.core.profiles import ProfileStore
@@ -191,7 +192,10 @@ def play(ctx: click.Context, game_id: int) -> None:
     console = Console()
     database = Database(ctx.obj["database"])
     library = Library(database)
-    launcher = Launcher(library, ProfileStore(database))
+    launcher = Launcher(
+        library, ProfileStore(database),
+        controller_profiles=ControllerProfileStore(database),
+    )
 
     try:
         running = launcher.launch(game_id)
@@ -280,6 +284,86 @@ def list_games(ctx: click.Context, system: Optional[str], search: Optional[str])
 
     console.print(table)
     console.print(f"[dim]{len(games)} games[/]")
+    database.close()
+
+
+@main.command("verify")
+@click.option("--dats", type=click.Path(), default=None,
+              help="Folder of No-Intro/Redump DAT files. Defaults to <data dir>/dats.")
+@click.option("--system", default=None, help="Only check one system.")
+@click.option("--problems-only", is_flag=True, help="List only files worth acting on.")
+@click.pass_context
+def verify_roms(
+    ctx: click.Context,
+    dats: Optional[str],
+    system: Optional[str],
+    problems_only: bool,
+) -> None:
+    """Check ROMs against the No-Intro and Redump catalogues.
+
+    DAT files are not shipped with GameLab — the preservation projects publish
+    them under their own terms and revise them weekly. Download the sets you
+    care about and drop them in the folder.
+    """
+    from rich.console import Console
+    from rich.table import Table
+
+    from rose_gamelab.core import rom_health
+    from rose_gamelab.core.library import Library
+    from rose_gamelab.db.database import DEFAULT_DB_PATH
+
+    console = Console()
+    folder = Path(dats) if dats else DEFAULT_DB_PATH.parent / "dats"
+
+    index = rom_health.load_dats(folder)
+    if index.empty:
+        console.print(f"[yellow]No usable DAT files in {folder}[/]")
+        console.print(
+            "Download DATs from [link]https://datomatic.no-intro.org[/] or "
+            "[link]http://redump.org/downloads/[/] and put them there."
+        )
+        return
+
+    console.print(
+        f"[dim]{len(index.catalogues)} catalogues loaded: "
+        f"{', '.join(index.catalogues)}[/]"
+    )
+
+    database = Database(ctx.obj["database"])
+    library = Library(database)
+    results = rom_health.check_library(library, index, system=system)
+
+    shown = list(rom_health.problems(results)) if problems_only else results
+
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Title")
+    table.add_column("System")
+    table.add_column("Verdict")
+
+    colours = {
+        rom_health.Health.VERIFIED: "green",
+        rom_health.Health.KNOWN_BAD: "red",
+        rom_health.Health.MODIFIED: "yellow",
+        rom_health.Health.UNKNOWN: "dim",
+        rom_health.Health.NOT_CATALOGUED: "dim",
+    }
+    for item in shown:
+        colour = colours[item.health]
+        table.add_row(item.title, item.system, f"[{colour}]{item.health.label}[/]")
+
+    if shown:
+        console.print(table)
+
+    counts = rom_health.summarise(results)
+    console.print(
+        f"[green]{counts[rom_health.Health.VERIFIED]} verified[/]  "
+        f"[red]{counts[rom_health.Health.KNOWN_BAD]} known bad[/]  "
+        f"[yellow]{counts[rom_health.Health.MODIFIED]} modified[/]  "
+        f"[dim]{counts[rom_health.Health.UNKNOWN]} not catalogued[/]"
+    )
+    if not results:
+        console.print("[dim]Nothing to check — no files have been hashed yet.[/]")
+
     database.close()
 
 

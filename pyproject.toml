@@ -31,6 +31,14 @@ rose-gamelab = "rose_gamelab.main:main"
 [tool.setuptools.packages.find]
 include = ["rose_gamelab*"]
 
+# The controller database is data, not code, and setuptools ships no data file
+# it is not told about. Without this the wheel installs with no
+# gamecontrollerdb.txt and every pad silently falls back to its family layout —
+# working, but not what was promised, and invisible until someone plugs in a
+# SNES adapter.
+[tool.setuptools.package-data]
+rose_gamelab = ["data/*.txt", "data/*.LICENSE"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 120

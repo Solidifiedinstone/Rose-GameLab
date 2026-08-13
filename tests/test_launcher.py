@@ -478,3 +478,88 @@ def test_a_configured_retroarch_path_wins(library, profiles, monkeypatch):
     )
     launcher = Launcher(library, profiles, retroarch_path="/opt/retroarch/bin/retroarch")
     assert launcher.resolve_retroarch() == ["/opt/retroarch/bin/retroarch"]
+
+
+# ── Controller configuration ──────────────────────────────────────
+
+def _pad(name="Wireless Controller", vendor=0x054C, product=0x09CC):
+    from rose_gamelab.core.controller import InputDevice
+
+    return InputDevice(
+        name=name, vendor_id=vendor, product_id=product,
+        bustype=0x0003, version=0x0100,
+    )
+
+
+def test_controller_mapping_reaches_a_launched_emulator(library, profiles, monkeypatch):
+    """Regression: sdl_environment() existed, was documented as the highest
+    leverage output in the module, and was never called from anywhere — so a
+    mapped pad never actually reached any emulator."""
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", lambda: [_pad()]
+    )
+    launcher = Launcher(library, profiles)
+
+    env = launcher.controller_environment("emulator")
+
+    assert "SDL_GAMECONTROLLERCONFIG" in env
+    assert env["SDL_JOYSTICK_HIDAPI"] == "0"
+
+
+def test_steam_launches_are_left_alone(library, profiles, monkeypatch):
+    """Steam starts the game from its own environment and has Steam Input."""
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", lambda: [_pad()]
+    )
+    launcher = Launcher(library, profiles)
+
+    assert launcher.controller_environment("steam") == {}
+    assert launcher.controller_environment("heroic") == {}
+
+
+def test_controller_configuration_can_be_turned_off(library, profiles, monkeypatch):
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", lambda: [_pad()]
+    )
+    launcher = Launcher(library, profiles, configure_controllers=False)
+
+    assert launcher.controller_environment("emulator") == {}
+
+
+def test_no_controllers_sets_no_variables(library, profiles, monkeypatch):
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", list
+    )
+    launcher = Launcher(library, profiles)
+
+    assert launcher.controller_environment("emulator") == {}
+
+
+def test_a_broken_detection_never_stops_a_game_launching(library, profiles, monkeypatch):
+    """Not being able to identify a pad is a reason to fall back to SDL's own
+    defaults, not a reason to refuse to start the game."""
+    def explode():
+        raise OSError("/proc/bus/input/devices is on fire")
+
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", explode
+    )
+    launcher = Launcher(library, profiles)
+
+    assert launcher.controller_environment("emulator") == {}
+
+
+def test_a_launch_profile_can_override_the_controller_configuration(library, profiles, monkeypatch):
+    """Someone who sets the variable by hand meant it."""
+    from rose_gamelab.core.profiles import LaunchProfile
+
+    monkeypatch.setattr(
+        "rose_gamelab.core.controller.detect_controllers", lambda: [_pad()]
+    )
+    launcher = Launcher(library, profiles)
+
+    base = dict(launcher.controller_environment("emulator"))
+    profile = LaunchProfile(env={"SDL_GAMECONTROLLERCONFIG": "mine"})
+    result = profile.environment(base)
+
+    assert result["SDL_GAMECONTROLLERCONFIG"] == "mine"

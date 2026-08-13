@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from rose_gamelab.core.controller_profiles import ControllerProfileStore
 from rose_gamelab.core.emulator import get_system
 from rose_gamelab.core.launcher import Launcher, LaunchError
 from rose_gamelab.core.library import NO_SOURCE, Library
@@ -43,6 +44,7 @@ from rose_gamelab.db.database import Database
 from rose_gamelab.metadata.retroachievements import on_retroachievements
 from rose_gamelab.metadata.scraper import Scraper
 from rose_gamelab.ui.branding import APP_NAME
+from rose_gamelab.ui.controller_watch import ControllerWatcher
 from rose_gamelab.ui.preferences import Preferences, retroachievements_credentials
 from rose_gamelab.ui.theme import (
     COVER_WIDTHS,
@@ -52,6 +54,7 @@ from rose_gamelab.ui.theme import (
     set_active_style,
 )
 from rose_gamelab.ui.widgets.browse_view import BrowseView
+from rose_gamelab.ui.widgets.controller_indicator import ControllerIndicator
 from rose_gamelab.ui.widgets.detail_panel import DetailPanel
 from rose_gamelab.ui.widgets.game_grid import GameGrid
 from rose_gamelab.ui.widgets.game_page import GamePage
@@ -90,7 +93,10 @@ class MainWindow(QMainWindow):
         self.profiles = ProfileStore(database)
         self.profiles.ensure_default_exists()
         self.scanner = RomScanner(self.library)
-        self.launcher = Launcher(self.library, self.profiles)
+        self.controller_store = ControllerProfileStore(database)
+        self.launcher = Launcher(
+            self.library, self.profiles, controller_profiles=self.controller_store
+        )
         self.scraper = Scraper(self.library)
 
         # Loaded rather than defaulted: the theme picker used to change the
@@ -116,6 +122,7 @@ class MainWindow(QMainWindow):
 
         self._build()
         self._build_shortcuts()
+        self._build_controller_watch()
         self.refresh()
 
         # Steam is found and imported on its own. Making the user press
@@ -248,6 +255,9 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
+        self.controller_indicator = ControllerIndicator(self.theme)
+        layout.addWidget(self.controller_indicator)
+
         self.progress = QProgressBar()
         self.progress.setFixedWidth(220)
         self.progress.hide()
@@ -255,11 +265,29 @@ class MainWindow(QMainWindow):
 
         return bar
 
+    def _build_controller_watch(self) -> None:
+        """Notice pads being plugged in while GameLab is already running.
+
+        Which is the normal order of events: you sit down, then pick up the pad.
+        """
+        self.controllers = ControllerWatcher(self)
+        self.controllers.changed.connect(self._controllers_changed)
+        self.controllers.start()
+
+    def _controllers_changed(self, statuses: list) -> None:
+        self.controller_indicator.set_statuses(statuses)
+        # Big Picture, if it is open, shows the same information.
+        big_picture = getattr(self, "big_picture", None)
+        if big_picture is not None and big_picture.isVisible():
+            big_picture.set_controllers(statuses)
+
     def _build_shortcuts(self) -> None:
         for key, slot in (
             ("Ctrl+F", lambda: self.search.setFocus()),
             ("Ctrl+R", self.rescan_all),
             ("Ctrl+B", self.open_big_picture),
+            # Shift+Tab, as Steam trained everyone to expect.
+            ("Shift+Tab", self.toggle_game_overlay),
             # Wrapped: QAction.triggered would otherwise pass its `checked`
             # flag in as the list of files to organise.
             ("Ctrl+O", lambda: self.organise_roms()),
@@ -1098,13 +1126,49 @@ class MainWindow(QMainWindow):
             else "Artwork key cleared"
         )
 
+    def toggle_game_overlay(self) -> None:
+        """Show the panel for whatever is running, or hide it if it is up.
+
+        Does nothing when no game is running: a panel about a game that is not
+        being played has nothing to say.
+        """
+        overlay = getattr(self, "game_overlay", None)
+        if overlay is not None and overlay.isVisible():
+            overlay.close()
+            return
+
+        running = next(iter(self.launcher.running.values()), None)
+        if running is None:
+            self.status.setText("Nothing is running to show a panel for")
+            return
+
+        game = self.library.get(running.game_id)
+        if game is None:
+            return
+
+        if overlay is None:
+            from rose_gamelab.ui.game_overlay import GameOverlay
+
+            overlay = GameOverlay(self.library, self.theme)
+            self.game_overlay = overlay
+
+        overlay.show_for(game, controllers=self.controllers.statuses)
+
     def open_big_picture(self) -> None:
         from rose_gamelab.ui.big_picture import BigPictureWindow
 
         self.big_picture = BigPictureWindow(
             self.library, self.launcher, self.theme, parent=None
         )
+        # Whatever is already connected, rather than waiting for the next poll.
+        self.big_picture.set_controllers(self.controllers.statuses)
         self.big_picture.showFullScreen()
+        # Ask the compositor for the keyboard, rather than assuming a new
+        # full-screen window is given it: without this the main window can keep
+        # focus and Big Picture ignores every key.
+        self.big_picture.raise_()
+        self.big_picture.activateWindow()
+        self.big_picture.setFocus()
 
     def apply_theme(self, theme: Theme) -> None:
         """Repaint in a new colour scheme, keeping the current style."""

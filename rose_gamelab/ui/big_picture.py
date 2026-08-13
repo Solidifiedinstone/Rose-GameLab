@@ -40,6 +40,7 @@ from rose_gamelab.core.emulator import get_system
 from rose_gamelab.core.launcher import LaunchError
 from rose_gamelab.ui import theme as ui_theme
 from rose_gamelab.ui.theme import COVER_RATIO, Theme
+from rose_gamelab.ui.widgets.controller_indicator import ControllerIndicator
 from rose_gamelab.ui.widgets.game_card import load_cover
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,16 @@ SCROLL_MS = 220
 
 
 class BigPictureTile(QLabel):
-    """One game in a shelf. Grows and gains a ring when focused."""
+    """One game in a shelf. Grows and gains a ring when focused.
+
+    Clickable as well as d-pad navigable: Big Picture is used on a television,
+    but it is also opened on the desktop by people holding a mouse, and a tile
+    that cannot be clicked reads as broken.
+    """
+
+    #: Emitted with this tile when it is clicked, and again on double click.
+    selected = Signal(object)
+    activated = Signal(object)
 
     def __init__(self, game, theme: Theme, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -60,6 +70,7 @@ class BigPictureTile(QLabel):
         self.game = game
         self.theme = theme
         self._focused = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.base_width = TILE_WIDTH
         self.base_height = int(TILE_WIDTH * COVER_RATIO)
@@ -77,6 +88,20 @@ class BigPictureTile(QLabel):
         if self._focused != focused:
             self._focused = focused
             self._render()
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.selected.emit(self)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.activated.emit(self)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def _render(self) -> None:
         width = int(self.base_width * (TILE_FOCUSED_SCALE if self._focused else 1.0))
@@ -110,6 +135,10 @@ class BigPictureTile(QLabel):
 class Shelf(QWidget):
     """A horizontally scrolling row of games with a heading."""
 
+    #: A tile in this shelf was clicked, or double-clicked, with its index.
+    tile_selected = Signal(int)
+    tile_activated = Signal(int)
+
     def __init__(self, title: str, games: list, theme: Theme, parent=None) -> None:
         super().__init__(parent)
 
@@ -132,6 +161,11 @@ class Shelf(QWidget):
         layout.addWidget(heading)
 
         self.scroll = QScrollArea()
+        # A scroll area takes keyboard focus by default and answers the arrow
+        # keys itself by scrolling. That silently swallowed every d-pad press
+        # before it could reach the window, so the selection never moved and
+        # Big Picture could not be navigated at all.
+        self.scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scroll.setWidgetResizable(True)
         self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -145,8 +179,14 @@ class Shelf(QWidget):
         row.setContentsMargins(0, 4, 0, 4)
         row.setSpacing(SHELF_SPACING)
 
-        for game in games:
+        for position, game in enumerate(games):
             tile = BigPictureTile(game, theme)
+            tile.selected.connect(
+                lambda _tile, index=position: self.tile_selected.emit(index)
+            )
+            tile.activated.connect(
+                lambda _tile, index=position: self.tile_activated.emit(index)
+            )
             self.tiles.append(tile)
             row.addWidget(tile)
 
@@ -173,12 +213,15 @@ class Shelf(QWidget):
 
     def move(self, delta: int) -> bool:
         """Move within the shelf. False when already at the end."""
-        new_index = self.index + delta
-        if not (0 <= new_index < len(self.tiles)):
+        return self.focus_tile(self.index + delta)
+
+    def focus_tile(self, index: int) -> bool:
+        """Focus one tile by position. False if there is no such tile."""
+        if not (0 <= index < len(self.tiles)):
             return False
 
         self.tiles[self.index].set_focused(False)
-        self.index = new_index
+        self.index = index
         self.tiles[self.index].set_focused(True)
         self._reveal()
         return True
@@ -244,9 +287,18 @@ class BigPictureWindow(QWidget):
         self.now_showing = QLabel()
         self.now_showing.setStyleSheet(f"color: {self.theme.text_dim}; font-size: 15px;")
         header.addWidget(self.now_showing)
+
+        # Larger than the desktop one: this is read from a sofa, and a dying
+        # pad is worth knowing about before the game starts, not during it.
+        self.controller_indicator = ControllerIndicator(self.theme, font_size=16)
+        header.addSpacing(20)
+        header.addWidget(self.controller_indicator)
+
         layout.addLayout(header)
 
         shelves_area = QScrollArea()
+        # As with each shelf: never take focus, or it eats the arrow keys.
+        shelves_area.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         shelves_area.setWidgetResizable(True)
         shelves_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         shelves_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -263,6 +315,13 @@ class BigPictureWindow(QWidget):
             if not games:
                 continue
             shelf = Shelf(title_text, games, self.theme)
+            position = len(self.shelves)
+            shelf.tile_selected.connect(
+                lambda index, row=position: self._select(row, index)
+            )
+            shelf.tile_activated.connect(
+                lambda index, row=position: self._activate(row, index)
+            )
             self.shelves.append(shelf)
             self.shelf_layout.addWidget(shelf)
 
@@ -271,8 +330,12 @@ class BigPictureWindow(QWidget):
         self.shelves_area = shelves_area
         layout.addWidget(shelves_area, 1)
 
+        # Only what actually works is listed. The A/B buttons were named here
+        # before any gamepad input existed to read them, which is a promise the
+        # interface could not keep.
         hint = QLabel(
-            "◀ ▶ browse    ▲ ▼ rows    Enter / A  play    Esc / B  exit"
+            "◀ ▶ browse    ▲ ▼ rows    Enter  play    Click / double-click  "
+            "select and play    Esc  exit"
         )
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet(
@@ -320,6 +383,37 @@ class BigPictureWindow(QWidget):
         if not self.shelves:
             return None
         return self.shelves[self.shelf_index]
+
+    def _select(self, row: int, index: int) -> None:
+        """Move the selection to a tile that was clicked."""
+        if not (0 <= row < len(self.shelves)):
+            return
+
+        if row != self.shelf_index:
+            self.shelves[self.shelf_index].set_active(False)
+            self.shelf_index = row
+            self.shelves[row].set_active(True)
+
+        self.shelves[row].focus_tile(index)
+        self._update_now_showing()
+        # Clicking a tile must not leave focus somewhere the arrow keys are
+        # not read, or the pointer and the d-pad stop agreeing.
+        self.setFocus()
+
+    def _activate(self, row: int, index: int) -> None:
+        """Select and launch a double-clicked tile."""
+        self._select(row, index)
+        self._launch_current()
+
+    def set_controllers(self, statuses: list) -> None:
+        """Show which pads are connected. Fed by the main window's watcher."""
+        self.controller_indicator.set_statuses(statuses)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Without this the first focusable child holds the keyboard, and every
+        # arrow key goes to it instead of to the navigation below.
+        self.setFocus()
 
     def _change_shelf(self, delta: int) -> None:
         new_index = self.shelf_index + delta
